@@ -9,6 +9,7 @@ from pathlib import Path
 
 SECONDS_PER_HOUR = 3600
 DISTANCE_UNCERTAINTY = 2.5*np.sqrt(2)/1600  # Distance measurement uncertainty (from https://community.geotab.com/s/article/How-does-the-GO-device-evaluate-coordinates?language=en_US)
+KM_PER_MILE = 1.60934
 
 def get_top_dir():
     '''
@@ -27,6 +28,12 @@ def get_top_dir():
     top_dir = os.path.dirname(source_dir)
     return top_dir
     
+# Function to calculate time difference in minutes
+def calculate_time_elapsed(row, start_time):
+    time_difference_seconds = (row['timestamp'] - start_time).total_seconds()
+    time_difference_minutes = time_difference_seconds / 60.
+    return time_difference_minutes
+    
 top_dir = get_top_dir()
 
 # Create the tables, plots and data directories if they don't already exist
@@ -44,14 +51,15 @@ files = [f'{top_dir}/data/pepsi_1_spd_dist_soc_cs_is_er.csv', f'{top_dir}/data/p
 data_df_dict = {}
 names = []
 for file in files:
-    name = file.split('/')[1].split('_spd_dist')[0]
+    name = file.split('/')[-1].split('_spd_dist')[0]
     data_df_dict[name] = pd.read_csv(file, low_memory=False)
     names.append(name)
     
     # Calculate accumulated distance
     data_df_dict[name]['accumulated_distance'] = data_df_dict[name]['distance'].cumsum()
+    data_df_dict[name].to_csv(f'{top_dir}/data/{name}_additional_cols.csv', index=False)
             
-"""
+
 ######################################## Analysis of charging power ########################################
 charging_powers = {}
 for name in names:
@@ -269,13 +277,15 @@ plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.png')
 plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.pdf')
 
 ############################################################################################################
-"""
 
-"""
+
+
 ############################ Analysis of actual driving range and battery energy ###########################
 
+
+######### Add activity, driving and charging events to dataframes #########
 for name in names:
-    data_df = data_df_dict[name]
+    data_df = pd.read_csv(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
     
     # Establish which periods are driving vs. charging
     data_df['activity'] = data_df['energytype'].fillna(method='ffill')
@@ -287,26 +297,20 @@ for name in names:
     
     data_df_dict[name] = data_df
     
-
-######################### Energy capacity #########################
+# Add driving and charging event numbers to the dataframes
 for name in names:
-    battery_data_dict = {
-        'charging_event': [],
-        'battery_size': [],
-        'battery_size_unc': []
-        }
-        
-    battery_data_linear_df = pd.DataFrame(battery_data_dict)
-    battery_data_quad_df = pd.DataFrame(battery_data_dict)
     data_df = data_df_dict[name]
     
-    # Make a column label to distinguish each charging event
+    # Make a column label to distinguish each driving and charging event
     data_df['charging_event'] = np.nan
+    data_df['driving_event'] = np.nan
     
     # Initialize variables to track charging events
     charging_event = 0
+    driving_event = 0
     prev_activity = data_df.at[data_df.index[0], 'activity']
     prev_soc = -1.
+    current_soc = 100
 
     # Iterate through the DataFrame and perform any needed row-by-row operations
     for index, row in data_df.iterrows():
@@ -325,7 +329,16 @@ for name in names:
         if current_activity == 'charging':
             if prev_activity == 'driving':
                 charging_event += 1
+                soc_diff = 0
             data_df.at[index, 'charging_event'] = charging_event
+        
+        # Increment the driving event number if the activity has changed from charging to driving, or if the SOC has changed by more than 5%
+        if current_activity == 'driving':
+            if prev_activity == 'charging':
+                driving_event += 1
+                soc_diff = 0
+            data_df.at[index, 'driving_event'] = driving_event
+            
         prev_activity = current_activity
         prev_soc = current_soc
         
@@ -338,9 +351,28 @@ for name in names:
             if pd.notna(prev_value) and pd.notna(next_value):
                 average = (prev_value + next_value) / 2
                 data_df.at[index, 'accumumlatedkwh'] = average
+                
+    data_df_dict[name] = data_df
+    data_df_dict[name].to_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', index=False)
+    
+###########################################################################
+
+
+
+######################### Energy capacity #########################
+for name in names:
+    battery_data_dict = {
+        'charging_event': [],
+        'battery_size': [],
+        'battery_size_unc': []
+        }
+        
+    battery_data_linear_df = pd.DataFrame(battery_data_dict)
+    battery_data_quad_df = pd.DataFrame(battery_data_dict)
+    data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
             
     # Iterate through all the charging events and plot them
-    n_charging_events = charging_event
+    n_charging_events = int(data_df['charging_event'].max())
     for charging_event in range(1, n_charging_events):
         # Make a cut to select only rows corresponding to the given charging event
         cChargingEvent = (data_df['charging_event'] == charging_event)
@@ -388,12 +420,9 @@ for name in names:
         # Plot the data and best fit line
         x_plot = np.linspace(0, 100, 1000)
         plt.plot(x_plot, slope * x_plot + b, color='red', label=best_fit_line)
-        #plt.plot(x_plot, a * x_plot**2 + b * x_plot + c, color='red', label=best_fit_line)
         plt.xlabel('State of Charge (%)')
         plt.ylabel('Accumulated Battery Energy (kWh)')
         plt.legend(fontsize=14)
-#        plt.savefig(f'plots/{name}_battery_soc_vs_energy_event_{charging_event}_quadfit.png')
-#        plt.savefig(f'plots/{name}_battery_soc_vs_energy_event_{charging_event}_quadfit.pdf')
         plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_energy_event_{charging_event}_linearfit.png')
         plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_energy_event_{charging_event}_linearfit.pdf')
         plt.close()
@@ -477,17 +506,111 @@ for name in names:
     ax.legend(fontsize=16)
     plt.tight_layout()
     plt.savefig(f'{top_dir}/plots/{name}_battery_capacity_summary.png')
-    plt.savefig(f'{top_dir}/plots/{name}_battery_capacity_summary.png')
-###################################################################
-"""
-
-
-######################## Depth of Discharge #######################
-
+    plt.savefig(f'{top_dir}/plots/{name}_battery_capacity_summary.pdf')
 ###################################################################
 
 
-"""
+
+################ Charging Time and Depth of Discharge #############
+for name in names:
+    charging_dict = {
+        'charging_event': [],
+        'min_soc': [],
+        'max_soc': [],
+        'delta_soc': [],
+        'charging_time': [],
+        }
+        
+    charging_df = pd.DataFrame(charging_dict)
+    data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+
+    n_charging_events = int(data_df['charging_event'].max())
+    for charging_event in range(1, n_charging_events):
+        # Make a cut to select only rows corresponding to the given charging event
+        cChargingEvent = (data_df['charging_event'] == charging_event)
+        
+        # Only keep rows for which both the socpercent and accumumlatedkwh values are not nan
+        data_df_event = data_df[cChargingEvent].dropna(subset=['socpercent', 'timestamp'])
+        
+        # Convert timestamp format to python datetime
+        data_df_event['timestamp'] = pd.to_datetime(data_df_event['timestamp'])
+        
+        # Only consider the charging event for battery capacity estimation if >=1% of SOC has been recharged
+        min_soc = data_df_event['socpercent'].min()
+        max_soc = data_df_event['socpercent'].max()
+        delta_soc = max_soc - min_soc
+        if delta_soc < 1 or np.isnan(delta_soc):
+            continue
+        
+        # Calculate the total charging time (in minutes)
+        start_time = data_df_event['timestamp'].iloc[0]
+        charging_time = calculate_time_elapsed(data_df_event.iloc[-1], start_time)
+        charging_df = charging_df.append({'charging_event': charging_event, 'min_soc': min_soc, 'max_soc': max_soc, 'delta_soc': delta_soc, 'charging_time': charging_time}, ignore_index=True)
+        
+        # Plot the raw soc vs. time
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.set_title(f"{name.replace('_', ' ').capitalize()}: Charging Event {charging_event}", fontsize=18)
+        ax.set_ylabel('State of Charge (%)', fontsize=18)
+        ax.set_xlabel('Charging time elapsed (minutes)', fontsize=18)
+        ax.tick_params(axis='both', which='major', labelsize=14)
+        plt.text(0.35, 0.15, f'Charging Time: {charging_time:.1f} minutes\nChange in Battery Charge: {delta_soc:.1f}%\nMinimum depth of discharge: {min_soc:.1f}%', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
+        start_time = data_df_event['timestamp'].iloc[0]
+        charging_time_elapsed = data_df_event.apply(calculate_time_elapsed, axis=1, args=(start_time,))
+        ax.scatter(charging_time_elapsed, data_df_event['socpercent'])
+        plt.savefig(f'{top_dir}/plots/{name}_time_vs_battery_soc_event_{charging_event}.png')
+        plt.savefig(f'{top_dir}/plots/{name}_time_vs_battery_soc_event_{charging_event}.pdf')
+        plt.close()
+        
+    charging_df.to_csv(f'{top_dir}/tables/{name}_charging_time_data.csv', index=False)
+    
+# Calculate the average and standard deviation among all charging times and depth of discharges
+for name in names:
+    charging_df = pd.read_csv(f'{top_dir}/tables/{name}_charging_time_data.csv')
+    
+    # Calculated the average and std among all charging times and depths of discharge
+    mean_charging_time = np.average(charging_df['charging_time'])
+    min_charging_time = np.min(charging_df['charging_time'])
+    max_charging_time = np.max(charging_df['charging_time'])
+    std_charging_time = np.std(charging_df['charging_time'])
+    
+    mean_dod = np.average(charging_df['min_soc'])
+    min_dod = np.min(charging_df['min_soc'])
+    max_dod = np.max(charging_df['min_soc'])
+    std_dod = np.std(charging_df['min_soc'])
+    
+    # Plot the DoDs and charging times together
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    ax.set_title(f"{name.replace('_', ' ').capitalize()}: Summary of Charging Parameters", fontsize=18)
+    ax.set_xlabel('Minimum Depth of Discharge (%)', fontsize=18)
+    ax.set_ylabel('Charging Time (minutes)', fontsize=18)
+    ax.tick_params(axis='y')
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    ax.scatter(charging_df['min_soc'], charging_df['charging_time'], color='green')
+    
+    xmin, xmax = ax.get_xlim()
+    ax.set_xlim(xmin, xmax + (xmax-xmin)*0.5)
+    xmin, xmax = ax.get_xlim()
+    
+    ymin, ymax = ax.get_ylim()
+    ax.set_ylim(ymin, ymax + (ymax-ymin)*0.4)
+    ymin, ymax = ax.get_ylim()
+    
+    ax.axhline(mean_charging_time, color='green', linewidth=2, label=f'Mean charging time: {mean_charging_time:.1f}$\pm${std_charging_time:.1f} minutes\nMin: {min_charging_time:.1f} minutes\nMax: {max_charging_time:.1f} minutes\n')
+    ax.fill_between(np.linspace(xmin, xmax, 100), mean_charging_time-std_charging_time, mean_charging_time+std_charging_time, color='green', alpha=0.2, edgecolor='none')
+
+    ax.axvline(mean_dod, color='blue', linewidth=2, label=f'Mean depth of discharge: {mean_dod:.1f}%$\pm${std_dod:.1f}%\nMin: {min_dod:.1f}%\nMax: {max_dod:.1f}%')
+    ax.fill_betweenx(np.linspace(ymin, ymax, 100), mean_dod-std_dod, mean_dod+std_dod, color='blue', alpha=0.2, edgecolor='none')
+    
+    ax.legend(loc='upper right', fontsize=14)
+    plt.tight_layout()
+    plt.savefig(f'{top_dir}/plots/{name}_charging_summary.png')
+    plt.savefig(f'{top_dir}/plots/{name}_charging_summary.pdf')
+        
+###################################################################
+
+
+
 ########################## Driving Range ##########################
 
 for name in names:
@@ -498,37 +621,10 @@ for name in names:
         }
         
     range_data_df = pd.DataFrame(range_data_dict)
-    data_df = data_df_dict[name]
-    
-    # Make a column label to distinguish each driving event
-    data_df['driving_event'] = np.nan
-    
-    # Initialize variables to track driving events
-    driving_event = 0
-    prev_activity = data_df.at[data_df.index[0], 'activity']
-    prev_soc = -1.
-    current_soc = 100
-    soc_diff = 0
-    
-    # Iterate through the DataFrame and perform any needed row-by-row operations
-    for index, row in data_df.iterrows():
-        # Fill the driving_event column with an index representing how many driving events have occurred
-        current_activity = row['activity']
-        if not (np.isnan(row['socpercent']) or np.isnan(row['accumulated_distance'])):
-            current_soc = row['socpercent']
-            soc_diff = np.absolute(current_soc - prev_soc)
-        
-        # Increment the driving event number if the activity has changed from charging to driving, or if the SOC has changed by more than 5%
-        if current_activity == 'driving':
-            if prev_activity == 'charging' or soc_diff > 5:     # The or soc_diff > 5% is to ensure there are no weird gaps in soc within a single driving events
-                driving_event += 1
-                soc_diff = 0
-            data_df.at[index, 'driving_event'] = driving_event
-        prev_activity = current_activity
-        prev_soc = current_soc
+    data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
         
     # Iterate through all the driving events and plot them
-    n_driving_events = driving_event
+    n_driving_events = int(data_df['driving_event'].max())
     for driving_event in range(1, n_driving_events):
         # Make a cut to select only rows corresponding to the given driving event
         cDrivingEvent = (data_df['driving_event'] == driving_event)
@@ -635,7 +731,74 @@ for name in names:
     plt.savefig(f'{top_dir}/plots/{name}_range_summary.pdf')
     
 ###################################################################
-"""
 
+
+########################## Drive Cycle ##########################
+for name in names:
+        
+    data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+        
+    # Iterate through all the driving events and plot them
+    n_driving_events = int(data_df['driving_event'].max())
+    for driving_event in range(1, n_driving_events):
+        # Make a cut to select only rows corresponding to the given driving event
+        cDrivingEvent = (data_df['driving_event'] == driving_event)
+        
+        # Only keep rows for which both the socpercent and accumumlatedkwh values are not nan
+        data_df_event = data_df[cDrivingEvent].dropna(subset=['timestamp', 'speed'])
+        
+        # Only plot and analyze charging events with at least 10 datapoints
+        if len(data_df_event) < 10:
+            continue
+        
+        # Convert timestamp format to python datetime
+        data_df_event['timestamp'] = pd.to_datetime(data_df_event['timestamp'])
+        
+        # Add a column with the time elapsed (in minutes)
+        start_time = data_df_event['timestamp'].iloc[0]
+        data_df_event['time_elapsed'] = data_df_event.apply(calculate_time_elapsed, axis=1, args=(start_time,))
+            
+        # Only consider the driving event where the drive time is >5 minutes
+        total_drive_time = data_df_event['time_elapsed'].max()
+        if data_df_event['time_elapsed'].max() < 5:
+            continue
+            
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.set_title(f"{name.replace('_', ' ').capitalize()}: Driving Event {driving_event}", fontsize=18)
+        ax.set_ylabel('Speed (mph)', fontsize=18)
+        ax.set_xlabel('Driving time (minutes)', fontsize=18)
+        ax.tick_params(axis='both', which='major', labelsize=14)
+        
+        ax.plot(data_df_event['time_elapsed'], data_df_event['speed'])
+        
+        ymin, ymax = ax.get_ylim()
+        ax.set_ylim(ymin, ymax + (ymax-ymin)*0.4)
+        ymin, ymax = ax.get_ylim()
+        total_drive_time_hours = total_drive_time / 60.
+        plt.text(0.45, 0.75, f'Total drive time: {total_drive_time_hours:.1f} hours', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
+        
+        plt.savefig(f'{top_dir}/plots/{name}_drive_cycle_{driving_event}.png')
+        plt.savefig(f'{top_dir}/plots/{name}_drive_cycle_{driving_event}.pdf')
+        plt.close()
+        
+        # Extract the drive cycle (time and speed columns)
+        drive_cycle_df = data_df_event.filter(['time_elapsed','speed'], axis=1)
+        
+        # Convert the time elapsed from  minutes to seconds
+        drive_cycle_df['time_elapsed'] = drive_cycle_df['time_elapsed'] * 60
+        
+        # Convert the speed to km/h
+        drive_cycle_df['speed'] = drive_cycle_df['speed'] * KM_PER_MILE
+        
+        # Add a column of zeros as a stand-in for the road grade (which unfortunately wasn't included in the NACFE data)
+        drive_cycle_df['road_grade'] = drive_cycle_df['speed'] * 0
+        
+        # Save to a csv file
+        drive_cycle_df.to_csv(f'{top_dir}/tables/{name}_drive_cycle_{driving_event}.csv', header=['Time (s)', 'Vehicle speed (km/h)', 'Road Grade (%)'], index=False)
+
+#################################################################
 
 ############################################################################################################
+
+
+
