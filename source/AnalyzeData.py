@@ -1,5 +1,8 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
+from matplotlib.dates import DateFormatter, date2num
+import matplotlib.dates as mdates
 from datetime import datetime
 from scipy import stats
 import numpy as np
@@ -7,9 +10,12 @@ from matplotlib.ticker import (MultipleLocator, AutoMinorLocator)
 import os
 from pathlib import Path
 
-SECONDS_PER_HOUR = 3600
-DISTANCE_UNCERTAINTY = 2.5*np.sqrt(2)/1600  # Distance measurement uncertainty (from https://community.geotab.com/s/article/How-does-the-GO-device-evaluate-coordinates?language=en_US)
+SECONDS_PER_HOUR = 3600.
+MINUTES_PER_DAY = 60.*24.
+DAYS_PER_YEAR = 365.
+DISTANCE_UNCERTAINTY = 2.5*np.sqrt(2)/1600.  # Distance measurement uncertainty (from https://community.geotab.com/s/article/How-does-the-GO-device-evaluate-coordinates?language=en_US)
 KM_PER_MILE = 1.60934
+DAYS_PER_MONTH = 30.437
 
 def get_top_dir():
     '''
@@ -46,24 +52,65 @@ if not os.path.exists(f'{top_dir}/tables'):
 if not os.path.exists(f'{top_dir}/plots'):
     os.makedirs(f'{top_dir}/plots')
 
-# Read CSV files into Pandas DataFrames
+
+# Collect filenames
 files = [f'{top_dir}/data/pepsi_1_spd_dist_soc_cs_is_er.csv', f'{top_dir}/data/pepsi_2_spd_dist_cs_is_er.csv', f'{top_dir}/data/pepsi_3_spd_dist_cs_is_er.csv']
-data_df_dict = {}
+
 names = []
 for file in files:
     name = file.split('/')[-1].split('_spd_dist')[0]
-    data_df_dict[name] = pd.read_csv(file, low_memory=False)
     names.append(name)
+
+"""
+for file in files:
+    name = file.split('/')[-1].split('_spd_dist')[0]
+    names.append(name)
+    data_df = pd.read_csv(file, low_memory=False)
+    
+    data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
+    
+    # Remove events after the timestamp when the state of charge stops being measured
+    data_with_soc = data_df[~data_df['socpercent'].isna()]
+    
+    max_timestamp_with_soc = data_with_soc['timestamp'].max()
+    data_df = data_df[data_df['timestamp'] < max_timestamp_with_soc]
+    
+    # For Pepsi 1, remove events after the last charging event on Sept 16
+    if name=='pepsi_1':
+        lt_date = pd.Timestamp('2023-09-17 00:00:00', tz='UTC')
+        data_df = data_df[data_df['timestamp'] < lt_date]
+        data_charging_df = data_df[~data_df['energytype'].isna()]
+        max_charging_timestamp = data_charging_df['timestamp'].max()
+        data_df = data_df[data_df['timestamp'] < max_charging_timestamp]
     
     # Calculate accumulated distance
-    data_df_dict[name]['accumulated_distance'] = data_df_dict[name]['distance'].cumsum()
-    data_df_dict[name].to_csv(f'{top_dir}/data/{name}_additional_cols.csv', index=False)
-            
+    data_df['accumulated_distance'] = data_df['distance'].cumsum()
+    data_df.to_csv(f'{top_dir}/data/{name}_additional_cols.csv', index=False)
 
+
+################################### Collect and save high-level metadata ###################################
+for name in names:
+    data_df = pd.read_csv(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
+    metadata_dict = {
+        'total_time': [],
+        'total_miles': [],
+        'total_kWh_charged': []
+        }
+        
+        # Convert timestamps to datetime
+        data_df['timestamp'] = pd.to_datetime(data_driving_df['timestamp'])
+        total_time =
+        
+    vmt_data_df = pd.DataFrame(vmt_data_dict)
+
+############################################################################################################
+"""
+            
+"""
 ######################################## Analysis of charging power ########################################
 charging_powers = {}
 for name in names:
-    data_df = data_df_dict[name]
+    data_df = pd.read_csv(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
     data_charging_df = data_df[data_df['energytype'] == 'energy_from_dc_charger']
     data_charging_df['timestamp'] = pd.to_datetime(data_charging_df['timestamp'])
 
@@ -85,7 +132,7 @@ for name in names:
     charging_powers[name] = data_charging_df['charging_power']
 
 
-    # Plot the charging power as a function of timestamp, both overall and on a daily basis
+    # Plot the charging power as a function of timestamp
     fig, ax = plt.subplots(figsize=(18, 3))
     ax.set_title(name.replace('_', ' ').capitalize(), fontsize=20)
     plt.plot(data_charging_df['timestamp'], data_charging_df['charging_power'], 'o', markersize=1)
@@ -154,7 +201,7 @@ def draw_binned_step(binned_data, linecolor='red', linelabel='', linewidth=2):
 binned_e_per_d_driving_dict = {}
 binned_e_per_d_driving_and_regen_dict = {}
 for name in names:
-    data_df = data_df_dict[name]
+    data_df = pd.read_csv(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
     
     # Collect data during both driving and regen
     data_driving_df = data_df[(data_df['energytype'] == 'driving_energy') & (data_df['distance'].notna()) & (data_df['distance'] != 0)]
@@ -277,13 +324,14 @@ plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.png')
 plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.pdf')
 
 ############################################################################################################
-
+"""
 
 
 ############################ Analysis of actual driving range and battery energy ###########################
 
-
+"""
 ######### Add activity, driving and charging events to dataframes #########
+data_df_dict = {}
 for name in names:
     data_df = pd.read_csv(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
     
@@ -296,7 +344,8 @@ for name in names:
     data_df = data_df.dropna(subset=['activity'])
     
     data_df_dict[name] = data_df
-    
+
+
 # Add driving and charging event numbers to the dataframes
 for name in names:
     data_df = data_df_dict[name]
@@ -320,21 +369,21 @@ for name in names:
         current_soc = row['socpercent']
         
         # Update the activity to driving if the soc has decreased relative to its previous value
-        if current_soc < prev_soc:
-            current_activity = 'driving'
-            row['activity'] = 'driving'
+        if current_activity == 'charging' and current_soc <= prev_soc:
+            current_activity = np.nan
+            data_df.at[index, 'activity'] = np.nan
             data_df.at[index, 'charging_event'] = np.nan
         
         # Increment the charging event number if the activity has changed from driving to charging
         if current_activity == 'charging':
-            if prev_activity == 'driving':
+            if prev_activity == 'driving' or not isinstance(prev_activity, str):
                 charging_event += 1
                 soc_diff = 0
             data_df.at[index, 'charging_event'] = charging_event
         
         # Increment the driving event number if the activity has changed from charging to driving, or if the SOC has changed by more than 5%
         if current_activity == 'driving':
-            if prev_activity == 'charging':
+            if prev_activity == 'charging' or prev_activity == np.nan:
                 driving_event += 1
                 soc_diff = 0
             data_df.at[index, 'driving_event'] = driving_event
@@ -352,13 +401,12 @@ for name in names:
                 average = (prev_value + next_value) / 2
                 data_df.at[index, 'accumumlatedkwh'] = average
                 
-    data_df_dict[name] = data_df
-    data_df_dict[name].to_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', index=False)
+    data_df.to_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', index=False)
     
 ###########################################################################
+"""
 
-
-
+"""
 ######################### Energy capacity #########################
 for name in names:
     battery_data_dict = {
@@ -508,16 +556,16 @@ for name in names:
     plt.savefig(f'{top_dir}/plots/{name}_battery_capacity_summary.png')
     plt.savefig(f'{top_dir}/plots/{name}_battery_capacity_summary.pdf')
 ###################################################################
+"""
 
-
-
+"""
 ################ Charging Time and Depth of Discharge #############
 for name in names:
     charging_dict = {
         'charging_event': [],
         'min_soc': [],
         'max_soc': [],
-        'delta_soc': [],
+        'DoD': [],
         'charging_time': [],
         }
         
@@ -529,7 +577,7 @@ for name in names:
         # Make a cut to select only rows corresponding to the given charging event
         cChargingEvent = (data_df['charging_event'] == charging_event)
         
-        # Only keep rows for which both the socpercent and accumumlatedkwh values are not nan
+        # Only keep rows for which both the socpercent and timestamp values are not nan
         data_df_event = data_df[cChargingEvent].dropna(subset=['socpercent', 'timestamp'])
         
         # Convert timestamp format to python datetime
@@ -538,14 +586,14 @@ for name in names:
         # Only consider the charging event for battery capacity estimation if >=1% of SOC has been recharged
         min_soc = data_df_event['socpercent'].min()
         max_soc = data_df_event['socpercent'].max()
-        delta_soc = max_soc - min_soc
-        if delta_soc < 1 or np.isnan(delta_soc):
+        dod = max_soc - min_soc
+        if dod < 1 or np.isnan(dod):
             continue
         
         # Calculate the total charging time (in minutes)
         start_time = data_df_event['timestamp'].iloc[0]
         charging_time = calculate_time_elapsed(data_df_event.iloc[-1], start_time)
-        charging_df = charging_df.append({'charging_event': charging_event, 'min_soc': min_soc, 'max_soc': max_soc, 'delta_soc': delta_soc, 'charging_time': charging_time}, ignore_index=True)
+        charging_df = charging_df.append({'charging_event': charging_event, 'min_soc': min_soc, 'max_soc': max_soc, 'DoD': dod, 'charging_time': charging_time}, ignore_index=True)
         
         # Plot the raw soc vs. time
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -553,7 +601,7 @@ for name in names:
         ax.set_ylabel('State of Charge (%)', fontsize=18)
         ax.set_xlabel('Charging time elapsed (minutes)', fontsize=18)
         ax.tick_params(axis='both', which='major', labelsize=14)
-        plt.text(0.35, 0.15, f'Charging Time: {charging_time:.1f} minutes\nChange in Battery Charge: {delta_soc:.1f}%\nMinimum depth of discharge: {min_soc:.1f}%', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
+        plt.text(0.35, 0.15, f'Charging Time: {charging_time:.1f} minutes\nDepth of Discharge: {dod:.1f}%\nMinimum Battery Charge: {min_soc:.1f}%', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
         start_time = data_df_event['timestamp'].iloc[0]
         charging_time_elapsed = data_df_event.apply(calculate_time_elapsed, axis=1, args=(start_time,))
         ax.scatter(charging_time_elapsed, data_df_event['socpercent'])
@@ -573,10 +621,10 @@ for name in names:
     max_charging_time = np.max(charging_df['charging_time'])
     std_charging_time = np.std(charging_df['charging_time'])
     
-    mean_dod = np.average(charging_df['min_soc'])
-    min_dod = np.min(charging_df['min_soc'])
-    max_dod = np.max(charging_df['min_soc'])
-    std_dod = np.std(charging_df['min_soc'])
+    mean_dod = np.average(charging_df['DoD'])
+    min_dod = np.min(charging_df['DoD'])
+    max_dod = np.max(charging_df['DoD'])
+    std_dod = np.std(charging_df['DoD'])
     
     # Plot the DoDs and charging times together
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -586,20 +634,20 @@ for name in names:
     ax.set_ylabel('Charging Time (minutes)', fontsize=18)
     ax.tick_params(axis='y')
     ax.tick_params(axis='both', which='major', labelsize=14)
-    ax.scatter(charging_df['min_soc'], charging_df['charging_time'], color='green')
+    ax.scatter(charging_df['DoD'], charging_df['charging_time'], color='green')
     
     xmin, xmax = ax.get_xlim()
-    ax.set_xlim(xmin, xmax + (xmax-xmin)*0.5)
+    ax.set_xlim(xmin, xmax + (xmax-xmin))
     xmin, xmax = ax.get_xlim()
     
     ymin, ymax = ax.get_ylim()
     ax.set_ylim(ymin, ymax + (ymax-ymin)*0.4)
     ymin, ymax = ax.get_ylim()
     
-    ax.axhline(mean_charging_time, color='green', linewidth=2, label=f'Mean charging time: {mean_charging_time:.1f}$\pm${std_charging_time:.1f} minutes\nMin: {min_charging_time:.1f} minutes\nMax: {max_charging_time:.1f} minutes\n')
+    ax.axhline(mean_charging_time, color='green', linewidth=2, label=f'Mean charge time: {mean_charging_time:.1f}$\pm${std_charging_time:.1f} mins\nMin: {min_charging_time:.1f} minutes\nMax: {max_charging_time:.1f} minutes\n')
     ax.fill_between(np.linspace(xmin, xmax, 100), mean_charging_time-std_charging_time, mean_charging_time+std_charging_time, color='green', alpha=0.2, edgecolor='none')
 
-    ax.axvline(mean_dod, color='blue', linewidth=2, label=f'Mean depth of discharge: {mean_dod:.1f}%$\pm${std_dod:.1f}%\nMin: {min_dod:.1f}%\nMax: {max_dod:.1f}%')
+    ax.axvline(mean_dod, color='blue', linewidth=2, label=f'Mean DoD: {mean_dod:.1f}%$\pm${std_dod:.1f}%\nMin: {min_dod:.1f}%\nMax: {max_dod:.1f}%')
     ax.fill_betweenx(np.linspace(ymin, ymax, 100), mean_dod-std_dod, mean_dod+std_dod, color='blue', alpha=0.2, edgecolor='none')
     
     ax.legend(loc='upper right', fontsize=14)
@@ -608,9 +656,9 @@ for name in names:
     plt.savefig(f'{top_dir}/plots/{name}_charging_summary.pdf')
         
 ###################################################################
+"""
 
-
-
+"""
 ########################## Driving Range ##########################
 
 for name in names:
@@ -731,8 +779,9 @@ for name in names:
     plt.savefig(f'{top_dir}/plots/{name}_range_summary.pdf')
     
 ###################################################################
+"""
 
-
+"""
 ########################## Drive Cycle ##########################
 for name in names:
         
@@ -797,6 +846,142 @@ for name in names:
         drive_cycle_df.to_csv(f'{top_dir}/tables/{name}_drive_cycle_{driving_event}.csv', header=['Time (s)', 'Vehicle speed (km/h)', 'Road Grade (%)'], index=False)
 
 #################################################################
+"""
+
+
+######################## Extrapolated VMT #######################
+for name in names:
+    vmt_data_dict = {
+        'miles_driven': [],
+        'total_time': [],
+        'extrapolated_vmt': []
+        }
+        
+    vmt_data_df = pd.DataFrame(vmt_data_dict)
+    data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+    data_df_reduced = data_df.iloc[::100]
+    data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
+    data_df_reduced['timestamp'] = pd.to_datetime(data_df_reduced['timestamp'])
+
+    # Plot the charging power as a function of timestamp
+    fig, axs = plt.subplots(2, 1, figsize=(18, 6), gridspec_kw={'height_ratios': [1, 1]})  # 2 rows, 1 column
+    axs[0].set_title(name.replace('_', ' ').capitalize(), fontsize=20)
+    axs[0].plot(data_df_reduced.dropna(subset=['speed'])['timestamp'], data_df_reduced.dropna(subset=['speed'])['speed'])
+    axs[1].plot(data_df.dropna(subset=['socpercent', 'timestamp'])['timestamp'], data_df.dropna(subset=['socpercent', 'timestamp'])['socpercent'])
+    
+    cCharging = (data_df['activity'] == 'charging')
+    
+    data_df['charging_timestamp'] = data_df['timestamp']
+    data_df['charging_timestamp'][~cCharging] = np.nan
+    
+    ymin, ymax = axs[0].get_ylim()
+    axs[0].fill_between(data_df['charging_timestamp'], ymin, ymax, color='green', alpha=0.2, edgecolor='none')
+    axs[0].set_ylim(ymin, ymax)
+    
+    ymin, ymax = axs[1].get_ylim()
+    axs[1].fill_between(data_df['charging_timestamp'], ymin, ymax, color='green', alpha=0.2, edgecolor='none', label='Charging')
+    axs[1].set_ylim(ymin, ymax)
+    
+    cDriving = (data_df['activity'] == 'driving')
+    
+    data_df['driving_timestamp'] = data_df['timestamp']
+    data_df['driving_timestamp'][~cDriving] = np.nan
+    
+    ymin, ymax = axs[0].get_ylim()
+    axs[0].fill_between(data_df['driving_timestamp'], ymin, ymax, color='purple', alpha=0.2, edgecolor='none')
+    axs[0].set_ylim(ymin, ymax)
+    
+    ymin, ymax = axs[1].get_ylim()
+    axs[1].fill_between(data_df['driving_timestamp'], ymin, ymax, color='purple', alpha=0.2, edgecolor='none', label='Driving')
+    axs[1].set_ylim(ymin, ymax)
+    
+    axs[0].set_ylabel('Speed (mph)', fontsize=18)
+    axs[1].set_ylabel('State of Charge (%)', fontsize=18)
+    
+    axs[0].set_xlim(data_df['timestamp'].min(), data_df['timestamp'].max())
+    axs[1].set_xlim(data_df['timestamp'].min(), data_df['timestamp'].max())
+    
+    axs[0].xaxis.set_tick_params(labelbottom=False)
+    axs[0].tick_params(axis='both', which='major', labelsize=12)
+    axs[0].xaxis.set_major_locator(MaxNLocator(10))
+    
+    axs[1].tick_params(axis='both', which='major', labelsize=12)
+    axs[1].xaxis.set_major_locator(MaxNLocator(10))
+    axs[1].xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+    
+    axs[1].legend(fontsize=18, bbox_to_anchor=(1.0, 0.5))
+    plt.tight_layout()
+    plt.savefig(f'{top_dir}/plots/{name}_speed_vs_time.png')
+    plt.close()
+    
+    # Plot accumulated miles traveled over time
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.set_title(f"{name.replace('_', ' ').capitalize()}: Extrapolation of Annual VMT", fontsize=18)
+    ax.set_ylabel('Accumulated distance (miles)', fontsize=18)
+    ax.set_xlabel('Accumulated data collection time (days)', fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    
+    start_time = data_df['timestamp'].iloc[0]
+    collection_time_elapsed = data_df.apply(calculate_time_elapsed, axis=1, args=(start_time,)) / MINUTES_PER_DAY
+    total_distance = data_df['accumulated_distance'].max()
+    total_data_collection_time = collection_time_elapsed.max()
+    extrapolated_vmt = (total_distance / total_data_collection_time) * DAYS_PER_YEAR
+    vmt_data_df['miles_driven'] = total_distance
+    vmt_data_df['total_time'] = total_data_collection_time
+    vmt_data_df['extrapolated_vmt'] = extrapolated_vmt
+    
+    ax.plot(collection_time_elapsed, data_df['accumulated_distance'], 'o', markersize=1)
+    plt.text(0.35, 0.15, f'Total Distance: {total_distance:.1f} miles\nTotal Data Collection Time: {total_data_collection_time:.2f} days\nExtrapolated VMT: {extrapolated_vmt:.0f} miles/year', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
+        
+    plt.tight_layout()
+    plt.savefig(f'{top_dir}/plots/{name}_distance_vs_time.png')
+    plt.close()
+    
+    # Save the vmt data to a csv file
+    vmt_data_df.to_csv(f'{top_dir}/tables/{name}_vmt_data.csv', header=['Distance traveled (miles)', 'Total time (days)', 'Extrapolated Annual VMT (miles/year)'], index=False)
+        
+#################################################################
+
+############################################################################################################
+
+################################### Extrapolated Energy Delivered per Month ################################
+for name in names:
+    energy_data_dict = {
+        'energy_delivered': [],
+        'total_time': [],
+        'extrapolated_energy_per_month': []
+        }
+        
+    energy_data_df = pd.DataFrame(energy_data_dict)
+    data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+    data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
+    data_df_charging = data_df[data_df['energytype'] == 'energy_from_dc_charger']
+        
+    # Plot accumulated charging energy delivered over time
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.set_title(f"{name.replace('_', ' ').capitalize()}: Extrapolation of Energy Delivered by Chargers per Month", fontsize=18)
+    ax.set_ylabel('Accumulated electricity delivered (MWh)', fontsize=18)
+    ax.set_xlabel('Accumulated data collection time (days)', fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    
+    start_time = data_df['timestamp'].iloc[0]
+    collection_time_elapsed = data_df.apply(calculate_time_elapsed, axis=1, args=(start_time,)) / MINUTES_PER_DAY
+    total_energy_delivered = data_df_charging['accumumlatedkwh'].max() / 1e3        # Convert from kWh to MWh
+    total_data_collection_time = collection_time_elapsed.max()
+    extrapolated_energy_per_month = (total_energy_delivered / total_data_collection_time) * DAYS_PER_MONTH
+    energy_data_df['energy_delivered'] = total_energy_delivered
+    energy_data_df['total_time'] = total_data_collection_time
+    energy_data_df['extrapolated_energy_per_month'] = extrapolated_energy_per_month
+    
+    ax.plot(collection_time_elapsed[data_df['energytype'] == 'energy_from_dc_charger'], data_df_charging['accumumlatedkwh'] / 1e3, 'o', markersize=1)
+    plt.text(0.35, 0.15, f'Total Distance: {total_distance:.1f} miles\nTotal Data Collection Time: {total_data_collection_time:.2f} days\nExtrapolated Energy/Month: {extrapolated_energy_per_month:.1f} MWh/month', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
+        
+    plt.tight_layout()
+    plt.savefig(f'{top_dir}/plots/{name}_charging_energy_vs_time.png')
+    plt.close()
+    
+    # Save the vmt data to a csv file
+    energy_data_df.to_csv(f'{top_dir}/tables/{name}_energy_per_month_data.csv', header=['Energy Delivered (kWh)', 'Total time (days)', 'Extrapolated Energy Delivered/Month (kWh/month)'], index=False)
 
 ############################################################################################################
 
