@@ -174,7 +174,7 @@ plt.close()
 """
 
 """
-##################################### Analysis of electricity per mile #####################################
+#################################### Instantaneous electricity per mile ####################################
 
 # Function to binned data with a step plot (don't like matplotlib's options)
 def draw_binned_step(binned_data, linecolor='red', linelabel='', linewidth=2):
@@ -329,7 +329,6 @@ plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.pdf')
 
 ############################ Analysis of actual driving range and battery energy ###########################
 
-"""
 ######### Add activity, driving and charging events to dataframes #########
 data_df_dict = {}
 for name in names:
@@ -373,6 +372,7 @@ for name in names:
             current_activity = np.nan
             data_df.at[index, 'activity'] = np.nan
             data_df.at[index, 'charging_event'] = np.nan
+            current_activity = 'driving'
         
         # Increment the charging event number if the activity has changed from driving to charging
         if current_activity == 'charging':
@@ -404,9 +404,9 @@ for name in names:
     data_df.to_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', index=False)
     
 ###########################################################################
-"""
 
-"""
+
+
 ######################### Energy capacity #########################
 for name in names:
     battery_data_dict = {
@@ -519,6 +519,8 @@ for name in names:
 
 
 # Calculate the weighted average of all estimates for each truck, along with standard deviation
+battery_capacity_save = pd.DataFrame({'Value': ['Mean', 'Standard Deviation']})
+battery_capacities = np.zeros(0)
 for name in names:
     battery_data_linearfit_df = pd.read_csv(f'{top_dir}/tables/{name}_battery_data_linearfit.csv')
     battery_data_quadfit_df = pd.read_csv(f'{top_dir}/tables/{name}_battery_data_quadfit.csv')
@@ -555,10 +557,16 @@ for name in names:
     plt.tight_layout()
     plt.savefig(f'{top_dir}/plots/{name}_battery_capacity_summary.png')
     plt.savefig(f'{top_dir}/plots/{name}_battery_capacity_summary.pdf')
-###################################################################
-"""
+    
+    battery_capacities = np.append(battery_capacities, weighted_mean_quadfit)
+    battery_capacity_save[name] = [weighted_mean_quadfit, weighted_std_quadfit]
+    
+battery_capacity_save['average'] = [np.mean(battery_capacities), np.std(battery_capacities)]
+battery_capacity_save.to_csv('tables/pepsi_semi_battery_capacities.csv')
 
-"""
+###################################################################
+
+
 ################ Charging Time and Depth of Discharge #############
 for name in names:
     charging_dict = {
@@ -656,21 +664,32 @@ for name in names:
     plt.savefig(f'{top_dir}/plots/{name}_charging_summary.pdf')
         
 ###################################################################
-"""
 
-"""
-########################## Driving Range ##########################
 
+
+################ Drivecycle and extrapolated range ################
+
+# Read in saved csv file with battery capacities
+battery_capacity_df = pd.read_csv('tables/pepsi_semi_battery_capacities.csv')
 for name in names:
-    range_data_dict = {
-        'driving_event': [],
-        'range': [],
-        'range_unc': []
+    drivecycle_data_dict = {
+        'Driving event': [],
+        'Initial battery charge (%)': [],
+        'Final battery charge (%)': [],
+        'Depth of Discharge (%)': [],
+        'Range (miles)': [],
+        'Range unc (miles)': [],
+        'Fuel economy (kWh/mile)': [],
+        'Fuel economy unc (kWh/mile)': [],
         }
         
-    range_data_df = pd.DataFrame(range_data_dict)
+    drivecycle_data_df = pd.DataFrame(drivecycle_data_dict)
     data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
-        
+    
+    # Read in the battery capacity for the given truck
+    battery_capacity = battery_capacity_df[name].iloc[0]
+    battery_capacity_unc = battery_capacity_df[name].iloc[1]
+    
     # Iterate through all the driving events and plot them
     n_driving_events = int(data_df['driving_event'].max())
     for driving_event in range(1, n_driving_events):
@@ -684,7 +703,7 @@ for name in names:
         if len(data_df_event) < 10:
             continue
             
-        # Only consider the driving event for battery capacity estimation if >=50% of SOC has been recharged
+        # Only consider the driving event for battery capacity estimation if >=50% of SOC has been discharged
         if data_df_event['socpercent'].max() - data_df_event['socpercent'].min() < 50:
             continue
             
@@ -730,9 +749,25 @@ for name in names:
         truck_range = -1 * slope * 100
         truck_range_unc = slope_unc * 100
         
-        range_data_df = range_data_df.append({'driving_event': driving_event, 'range': truck_range, 'range_unc': truck_range_unc}, ignore_index=True)
+        # Evaluate the depth of discharge
+        battery_charge_init = data_df_event['socpercent'].max()
+        battery_charge_final = data_df_event['socpercent'].min()
+        dod = battery_charge_init - battery_charge_final
+    
+        # Evaluate the change in battery energy over the drivecycle
+        delta_battery_energy = dod * battery_capacity / 100.
+        delta_battery_energy_unc = dod * battery_capacity_unc / 100.
         
-        best_fit_line = f"Best-fit Line \ny = mx + b \nm={slope:.3f}$\pm${slope_unc:.3f}\nExtrapolated Range: {truck_range:.1f}$\pm${truck_range_unc:.1f} miles"
+        # Evaluate the total distance traveled over the drivecycle
+        distance_traveled = data_df_event['accumulated_distance'].max() - data_df_event['accumulated_distance'].min()
+        
+        # Evaluate the extrapolated fuel economy (kWh/mile)
+        fuel_economy = delta_battery_energy / distance_traveled
+        fuel_economy_unc = delta_battery_energy_unc / distance_traveled
+        
+        drivecycle_data_df = drivecycle_data_df.append({'Driving event': int(driving_event), 'Initial battery charge (%)': battery_charge_init, 'Final battery charge (%)': battery_charge_final, 'Depth of Discharge (%)': dod, 'Range (miles)': truck_range, 'Range unc (miles)': truck_range_unc, 'Fuel economy (kWh/mile)': fuel_economy, 'Fuel economy unc (kWh/mile)': fuel_economy_unc}, ignore_index=True)
+        
+        best_fit_line = f'Best-fit Line \ny = mx + b \nm={slope:.3f}$\pm${slope_unc:.3f}\nExtrapolated Range: {truck_range:.1f}$\pm${truck_range_unc:.1f} miles'
         
         # Plot the data and best fit line
         x_plot = np.linspace(0, 100, 1000)
@@ -741,11 +776,15 @@ for name in names:
         
         xmin, xmax = axs[0].get_xlim()
         axs[1].set_xlim(xmin, xmax)
+        
+        axs[0].text(0.15, 0.45, f'Extrapolated fuel economy: {fuel_economy:.2f}$\pm${fuel_economy_unc:.2f}', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
+        
         plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_distance_event_{driving_event}_linearfit.png')
         plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_distance_event_{driving_event}_linearfit.pdf')
         plt.close()
 
-    range_data_df.to_csv(f'tables/{name}_range_data_linearfit.csv', index=False)
+    drivecycle_data_df['Driving event'] = drivecycle_data_df['Driving event'].astype('int')
+    drivecycle_data_df.to_csv(f'tables/{name}_drivecycle_data.csv', index=False)
 
 # Calculate the average of all estimates for each truck, along with standard deviation
 for name in names:
@@ -764,7 +803,6 @@ for name in names:
     ax.tick_params(axis='both', which='major', labelsize=14)
     plt.xticks(range(len(range_data_linearfit_df['driving_event'])), labels=range_data_linearfit_df['driving_event'].astype(int))
     
-    
     plt.errorbar(range(len(range_data_linearfit_df['driving_event'])), range_data_linearfit_df['range'], yerr = range_data_linearfit_df['range_unc'], capsize=5, marker='o', linestyle='none', color='green')
     xmin, xmax = ax.get_xlim()
     ax.axhline(mean_linearfit, color='green', linewidth=2, label=f'Mean: {mean_linearfit:.1f}$\pm${std_linearfit:.1f}')
@@ -779,9 +817,8 @@ for name in names:
     plt.savefig(f'{top_dir}/plots/{name}_range_summary.pdf')
     
 ###################################################################
-"""
 
-"""
+
 ########################## Drive Cycle ##########################
 for name in names:
         
@@ -812,6 +849,12 @@ for name in names:
         if data_df_event['time_elapsed'].max() < 5:
             continue
             
+        # Evaluate the depth of discharge
+        battery_charge_init = data_df_event['socpercent'].max()
+        battery_charge_final = data_df_event['socpercent'].min()
+        dod = battery_charge_init - battery_charge_final
+        
+        # Plot the speed vs. driving time
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.set_title(f"{name.replace('_', ' ').capitalize()}: Driving Event {driving_event}", fontsize=18)
         ax.set_ylabel('Speed (mph)', fontsize=18)
@@ -821,13 +864,38 @@ for name in names:
         ax.plot(data_df_event['time_elapsed'], data_df_event['speed'])
         
         ymin, ymax = ax.get_ylim()
-        ax.set_ylim(ymin, ymax + (ymax-ymin)*0.4)
+        ax.set_ylim(ymin, ymax + (ymax-ymin)*0.6)
         ymin, ymax = ax.get_ylim()
         total_drive_time_hours = total_drive_time / 60.
-        plt.text(0.45, 0.75, f'Total drive time: {total_drive_time_hours:.1f} hours', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
+        
+        plt.text(0.45, 0.65, f'Total drive time: {total_drive_time_hours:.1f} hours\nInitial Battery Charge: {battery_charge_init:.1f}%\nFinal Battery Charge: {battery_charge_final:.1f}%\nDepth of Discharge: {dod:.1f}%', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
         
         plt.savefig(f'{top_dir}/plots/{name}_drive_cycle_{driving_event}.png')
         plt.savefig(f'{top_dir}/plots/{name}_drive_cycle_{driving_event}.pdf')
+        plt.close()
+        
+        # Also plot the speed vs. state of charge to validate with best fit events
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.set_title(f"{name.replace('_', ' ').capitalize()}: Driving Event {driving_event}", fontsize=18)
+        ax.set_ylabel('Speed (mph)', fontsize=18)
+        ax.set_xlabel('State of charge (%)', fontsize=18)
+        ax.tick_params(axis='both', which='major', labelsize=14)
+        
+        data_df_event_plot = data_df_event.dropna(subset=['socpercent'])
+        ax.plot(data_df_event_plot['socpercent'], data_df_event_plot['speed'])
+        
+        ymin, ymax = ax.get_ylim()
+        ax.set_ylim(ymin, ymax + (ymax-ymin)*0.6)
+        ymin, ymax = ax.get_ylim()
+        
+        battery_charge_init = data_df_event['socpercent'].max()
+        battery_charge_final = data_df_event['socpercent'].min()
+        dod = battery_charge_init - battery_charge_final
+        
+        plt.text(0.45, 0.65, f'Total drive time: {total_drive_time_hours:.1f} hours\nInitial Battery Charge: {battery_charge_init:.1f}%\nFinal Battery Charge: {battery_charge_final:.1f}%\nDepth of Discharge: {dod:.1f}%', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
+        
+        plt.savefig(f'{top_dir}/plots/{name}_drive_cycle_soc_{driving_event}.png')
+        plt.savefig(f'{top_dir}/plots/{name}_drive_cycle_soc_{driving_event}.pdf')
         plt.close()
         
         # Extract the drive cycle (time and speed columns)
@@ -843,17 +911,17 @@ for name in names:
         drive_cycle_df['road_grade'] = drive_cycle_df['speed'] * 0
         
         # Save to a csv file
-        drive_cycle_df.to_csv(f'{top_dir}/tables/{name}_drive_cycle_{driving_event}.csv', header=['Time (s)', 'Vehicle speed (km/h)', 'Road Grade (%)'], index=False)
-
+        drive_cycle_df.to_csv(f'{top_dir}/tables/{name}_drive_cycle_{driving_event}.csv', header=['Time (s)', 'Vehicle speed (km/h)', 'Road grade (%)'], index=False)
+        
 #################################################################
+
+
 """
-
-
 ######################## Extrapolated VMT #######################
 for name in names:
     vmt_data_dict = {
         'miles_driven': [],
-        'total_time': [],
+        'total_time': [],d
         'extrapolated_vmt': []
         }
         
@@ -984,6 +1052,6 @@ for name in names:
     energy_data_df.to_csv(f'{top_dir}/tables/{name}_energy_per_month_data.csv', header=['Energy Delivered (kWh)', 'Total time (days)', 'Extrapolated Energy Delivered/Month (kWh/month)'], index=False)
 
 ############################################################################################################
-
+"""
 
 
