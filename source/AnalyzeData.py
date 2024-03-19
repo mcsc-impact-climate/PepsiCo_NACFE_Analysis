@@ -16,6 +16,7 @@ DAYS_PER_YEAR = 365.
 DISTANCE_UNCERTAINTY = 2.5*np.sqrt(2)/1600.  # Distance measurement uncertainty (from https://community.geotab.com/s/article/How-does-the-GO-device-evaluate-coordinates?language=en_US)
 KM_PER_MILE = 1.60934
 DAYS_PER_MONTH = 30.437
+METERS_PER_MILE = 1609.34
 
 def get_top_dir():
     '''
@@ -326,7 +327,7 @@ plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.pdf')
 ############################################################################################################
 """
 
-
+"""
 ############################ Analysis of actual driving range and battery energy ###########################
 
 ######### Add activity, driving and charging events to dataframes #########
@@ -664,9 +665,9 @@ for name in names:
     plt.savefig(f'{top_dir}/plots/{name}_charging_summary.pdf')
         
 ###################################################################
+"""
 
-
-
+"""
 ################ Drivecycle and extrapolated range ################
 
 # Read in saved csv file with battery capacities
@@ -817,7 +818,7 @@ for name in names:
     plt.savefig(f'{top_dir}/plots/{name}_range_summary.pdf')
     
 ###################################################################
-
+"""
 
 ########################## Drive Cycle ##########################
 for name in names:
@@ -912,6 +913,12 @@ for name in names:
         
         # Save to a csv file
         drive_cycle_df.to_csv(f'{top_dir}/tables/{name}_drive_cycle_{driving_event}.csv', header=['Time (s)', 'Vehicle speed (km/h)', 'Road grade (%)'], index=False)
+        
+        # Add in the accumulated distance since the start of the drivecycle
+        drive_cycle_df['accumulated_distance'] = (data_df_event['accumulated_distance'] - data_df_event['accumulated_distance'].iloc[0]) * METERS_PER_MILE
+        
+        # Save to a csv file
+        drive_cycle_df.to_csv(f'{top_dir}/tables/{name}_drive_cycle_{driving_event}_with_distance.csv', header=['Time (s)', 'Vehicle speed (km/h)', 'Road grade (%)', 'Cumulative distance (m)'], index=False)
         
 #################################################################
 
