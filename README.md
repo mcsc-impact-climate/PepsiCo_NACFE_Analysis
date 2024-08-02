@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/747760752.svg)](https://zenodo.org/doi/10.5281/zenodo.13173389)
+
 # Analysis of PepsiCo Data from the NACFE Trucking Pilot
 
 This repo contains some code to extract the following operational parameters for PepsiCo's Tesla Semi pilot in California using data published [here](https://runonless.com/run-on-less-electric-depot-reports/) by NACFE from their 2023 Run On Less pilot:
