@@ -62,7 +62,7 @@ for file in files:
     name = file.split('/')[-1].split('_spd_dist')[0]
     names.append(name)
 
-"""
+
 for file in files:
     name = file.split('/')[-1].split('_spd_dist')[0]
     names.append(name)
@@ -88,7 +88,7 @@ for file in files:
     data_df['accumulated_distance'] = data_df['distance'].cumsum()
     data_df.to_csv(f'{top_dir}/data/{name}_additional_cols.csv', index=False)
 
-
+"""
 ################################### Collect and save high-level metadata ###################################
 for name in names:
     data_df = pd.read_csv(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
@@ -325,9 +325,8 @@ plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.png')
 plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.pdf')
 
 ############################################################################################################
-"""
 
-"""
+
 ############################ Analysis of actual driving range and battery energy ###########################
 
 ######### Add activity, driving and charging events to dataframes #########
@@ -406,8 +405,9 @@ for name in names:
     
 ###########################################################################
 
+"""
 
-
+"""
 ######################### Energy capacity #########################
 for name in names:
     battery_data_dict = {
@@ -439,11 +439,11 @@ for name in names:
         
         # Plot the raw soc vs. energy data
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.set_title(f"{name.replace('_', ' ').capitalize()}: Charging Event {charging_event}", fontsize=18)
-        ax.set_xlabel('State of charge (%)', fontsize=16)
-        ax.set_ylabel('Battery energy (kWh)', fontsize=16)
-        ax.tick_params(axis='both', which='major', labelsize=14)
-        ax.scatter(data_df_event['socpercent'], data_df_event['accumumlatedkwh'])
+        #ax.set_title(f"{name.replace('_', ' ').capitalize()}: Charging Event {charging_event}", fontsize=18)
+        ax.set_xlabel('State of charge (%)', fontsize=24)
+        ax.set_ylabel('Battery energy (kWh)', fontsize=24)
+        ax.tick_params(axis='both', which='major', labelsize=20)
+        ax.scatter(data_df_event['socpercent'], data_df_event['accumumlatedkwh'], s=50, color='black')
         
         # Evaluate a best fit line
         x_values = data_df_event['socpercent']
@@ -457,21 +457,32 @@ for name in names:
         b = coefficients[1]
         slope_unc = np.sqrt(covariance[0, 0])
         b_unc = np.sqrt(covariance[1, 1])
+        
+        # Get the RMSE
+        y_pred = np.polyval(coefficients, x_values)
+        rmse = np.sqrt(np.mean((y_values - y_pred) ** 2))
 
         # The extrapolated battery size for linear fit is 100% x slope
         battery_size = slope * 100
         battery_size_unc = slope_unc * 100
         
-        battery_data_linear_df = battery_data_linear_df.append({'charging_event': charging_event, 'battery_size': battery_size, 'battery_size_unc': battery_size_unc}, ignore_index=True)
+        new_row = pd.DataFrame({
+            'charging_event': [charging_event],
+            'battery_size': [battery_size],
+            'battery_size_unc': [battery_size_unc]
+        })
         
-        best_fit_line = f"Best-fit Line \ny = mx + b \nm={slope:.3f}$\pm${slope_unc:.3f}\nExtrapolated Battery Size: {battery_size:.1f}$\pm${battery_size_unc:.1f} kWh"
+        battery_data_linear_df = pd.concat([battery_data_linear_df, new_row], ignore_index=True)
+        
+        best_fit_line = f"Best-fit Line \ny = mx + b \nm={slope:.3f}$\pm${slope_unc:.3f}\nRMSE: {rmse:.2f}"
+        
+        ax.text(0.33, 0.25, f'Extrapolated Battery Size: {battery_size:.1f}$\pm${battery_size_unc:.1f} kWh', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=20)
         
         # Plot the data and best fit line
         x_plot = np.linspace(0, 100, 1000)
-        plt.plot(x_plot, slope * x_plot + b, color='red', label=best_fit_line)
-        plt.xlabel('State of Charge (%)')
-        plt.ylabel('Accumulated Battery Energy (kWh)')
-        plt.legend(fontsize=14)
+        plt.plot(x_plot, slope * x_plot + b, color='red', label=best_fit_line, linewidth=3)
+        plt.legend(fontsize=20)
+        plt.tight_layout()
         plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_energy_event_{charging_event}_linearfit.png')
         plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_energy_event_{charging_event}_linearfit.pdf')
         plt.close()
@@ -479,11 +490,11 @@ for name in names:
         
         ##### Quadratic Fit ####
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.set_title(f"{name.replace('_', ' ').capitalize()}: Charging Event {charging_event}", fontsize=18)
-        ax.set_xlabel('State of charge (%)', fontsize=16)
-        ax.set_ylabel('Battery energy (kWh)', fontsize=16)
-        ax.tick_params(axis='both', which='major', labelsize=14)
-        ax.scatter(data_df_event['socpercent'], data_df_event['accumumlatedkwh'])
+        #ax.set_title(f"{name.replace('_', ' ').capitalize()}: Charging Event {charging_event}", fontsize=18)
+        ax.set_xlabel('State of charge (%)', fontsize=24)
+        ax.set_ylabel('Battery energy (kWh)', fontsize=24)
+        ax.tick_params(axis='both', which='major', labelsize=20)
+        ax.scatter(data_df_event['socpercent'], data_df_event['accumumlatedkwh'], s=50, color='black')
         
         coefficients, covariance = np.polyfit(x_values, y_values, 2, cov=True)
         
@@ -495,20 +506,32 @@ for name in names:
         b_unc = np.sqrt(covariance[1, 1])
         c_unc = np.sqrt(covariance[2, 2])
         
+                # Get the RMSE
+        y_pred = np.polyval(coefficients, x_values)
+        rmse = np.sqrt(np.mean((y_values - y_pred) ** 2))
+        
         # The extrapolated battery size for quadratic fit is (100%)^2a + 100b
         battery_size = a*100**2 + b*100
         battery_size_unc = np.sqrt((a_unc*100**2)**2 + (b_unc*100)**2)
         
-        battery_data_quad_df = battery_data_quad_df.append({'charging_event': charging_event, 'battery_size': battery_size, 'battery_size_unc': battery_size_unc}, ignore_index=True)
+        new_row_quad = pd.DataFrame({
+            'charging_event': [charging_event],
+            'battery_size': [battery_size],
+            'battery_size_unc': [battery_size_unc]
+        })
+
+        # Use concat to add the new row to the existing DataFrame
+        battery_data_quad_df = pd.concat([battery_data_quad_df, new_row_quad], ignore_index=True)
         
-        best_fit_line = f"Best-fit Quadratic \ny = ax$^2$ + bx + c \na={a:.4f}$\pm${a_unc:.4f}\nb: {b:.2f}$\pm${b_unc:.2f}\nExtrapolated Battery Capacity: {battery_size:.1f}$\pm${battery_size_unc:.1f} kWh"
+        best_fit_line = f"Best-fit Quadratic \ny = ax$^2$ + bx + c \na={a:.4f}$\pm${a_unc:.4f}\nb: {b:.2f}$\pm${b_unc:.2f}\nRMSE: {rmse:.2f}"
+        
+        ax.text(0.33, 0.25, f'Extrapolated Battery Size: {battery_size:.1f}$\pm${battery_size_unc:.1f} kWh', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=20)
         
         # Plot the data and best fit line
         x_plot = np.linspace(0, 100, 1000)
-        plt.plot(x_plot, a * x_plot**2 + b * x_plot + c, color='red', label=best_fit_line)
-        plt.xlabel('State of Charge (%)')
-        plt.ylabel('Accumulated Battery Energy (kWh)')
-        plt.legend(fontsize=14)
+        plt.plot(x_plot, a * x_plot**2 + b * x_plot + c, color='red', label=best_fit_line, linewidth=3)
+        plt.legend(fontsize=20)
+        plt.tight_layout()
         plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_energy_event_{charging_event}_quadfit.png')
         plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_energy_event_{charging_event}_quadfit.pdf')
         plt.close()
@@ -535,28 +558,29 @@ for name in names:
     
     # Plot all the battery capacity estimates together, along with the weighted mean and std
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.set_title(f"{name.replace('_', ' ').capitalize()}: Summary of Battery Capacity Estimates", fontsize=18)
-    ax.set_xlabel('Charging Event', fontsize=18)
-    ax.set_ylabel('Extrapolated Battery Capacity (kWh)', fontsize=18)
-    ax.tick_params(axis='both', which='major', labelsize=14)
+    #ax.set_title(f"{name.replace('_', ' ').capitalize()}: Summary of Battery Capacity Estimates", fontsize=18)
+    ax.set_xlabel('Charging Event', fontsize=24)
+    ax.set_ylabel('Battery Capacity (kWh)', fontsize=24)
+    ax.tick_params(axis='both', which='major', labelsize=20)
     plt.xticks(range(len(battery_data_linearfit_df['charging_event'])), labels=battery_data_linearfit_df['charging_event'].astype(int))
     
     
-    plt.errorbar(range(len(battery_data_linearfit_df['charging_event'])), battery_data_linearfit_df['battery_size'], yerr = battery_data_linearfit_df['battery_size_unc'], capsize=5, label='Linear Fit', marker='o', linestyle='none', color='green')
-    xmin, xmax = ax.get_xlim()
-    ax.axhline(weighted_mean_linearfit, color='green', linewidth=2, label=f'Weighted mean (linear): {weighted_mean_linearfit:.1f}$\pm${weighted_std_linearfit:.1f}')
-    ax.fill_between(np.linspace(xmin, xmax, 100), weighted_mean_linearfit-weighted_std_linearfit, weighted_mean_linearfit+weighted_std_linearfit, color='green', alpha=0.2, edgecolor='none')
+   # plt.errorbar(range(len(battery_data_linearfit_df['charging_event'])), battery_data_linearfit_df['battery_size'], yerr = battery_data_linearfit_df['battery_size_unc'], capsize=5, label='Linear Fit', marker='o', linestyle='none', color='green')
+    #ax.axhline(weighted_mean_linearfit, color='green', linewidth=2, label=f'Weighted mean (linear): {weighted_mean_linearfit:.1f}$\pm${weighted_std_linearfit:.1f}')
+    #ax.fill_between(np.linspace(xmin, xmax, 100), weighted_mean_linearfit-weighted_std_linearfit, weighted_mean_linearfit+weighted_std_linearfit, color='green', alpha=0.2, edgecolor='none')
     
-    plt.errorbar(range(len(battery_data_quadfit_df['charging_event'])), battery_data_quadfit_df['battery_size'], yerr = battery_data_quadfit_df['battery_size_unc'], capsize=5, label='Quadratic Fit', marker='o', linestyle='none', color='blue')
-    ax.axhline(weighted_mean_quadfit, color='blue', linewidth=2, label=f'Weighted mean (quad): {weighted_mean_quadfit:.1f}$\pm${weighted_std_quadfit:.1f}')
+    #plt.errorbar(range(len(battery_data_quadfit_df['charging_event'])), battery_data_quadfit_df['battery_size'], yerr = battery_data_quadfit_df['battery_size_unc'], capsize=5, label='Quadratic Fit', marker='o', linestyle='none', color='blue')
+    plt.errorbar(range(len(battery_data_quadfit_df['charging_event'])), battery_data_quadfit_df['battery_size'], yerr = battery_data_quadfit_df['battery_size_unc'], capsize=5, marker='o', linestyle='none', color='black', label = 'Extrapolated capacity')
+    xmin, xmax = ax.get_xlim()
+    ax.axhline(weighted_mean_quadfit, color='blue', linewidth=2, label=f'Weighted mean: {weighted_mean_quadfit:.1f}$\pm${weighted_std_quadfit:.1f}')
     ax.fill_between(np.linspace(xmin, xmax, 100), weighted_mean_quadfit-weighted_std_quadfit, weighted_mean_quadfit+weighted_std_quadfit, color='blue', alpha=0.2, edgecolor='none')
     
     ymin, ymax = ax.get_ylim()
     ax.set_ylim(ymin, ymax + (ymax-ymin)*0.4)
     ax.set_xlim(xmin, xmax)
-    ax.legend(fontsize=16)
+    ax.legend(fontsize=20)
     plt.tight_layout()
-    plt.savefig(f'{top_dir}/plots/{name}_battery_capacity_summary.png')
+    plt.savefig(f'{top_dir}/plots/{name}_battery_capacity_summary.png', dpi=300)
     plt.savefig(f'{top_dir}/plots/{name}_battery_capacity_summary.pdf')
     
     battery_capacities = np.append(battery_capacities, weighted_mean_quadfit)
@@ -566,8 +590,9 @@ battery_capacity_save['average'] = [np.mean(battery_capacities), np.std(battery_
 battery_capacity_save.to_csv('tables/pepsi_semi_battery_capacities.csv')
 
 ###################################################################
+"""
 
-
+"""
 ################ Charging Time and Depth of Discharge #############
 for name in names:
     charging_dict = {
@@ -665,11 +690,11 @@ for name in names:
     plt.savefig(f'{top_dir}/plots/{name}_charging_summary.pdf')
         
 ###################################################################
-"""
 
 """
 ################ Drivecycle and extrapolated range ################
 
+"""
 # Read in saved csv file with battery capacities
 battery_capacity_df = pd.read_csv('tables/pepsi_semi_battery_capacities.csv')
 for name in names:
@@ -682,6 +707,7 @@ for name in names:
         'Range unc (miles)': [],
         'Fuel economy (kWh/mile)': [],
         'Fuel economy unc (kWh/mile)': [],
+        'RMSE': [],
         }
         
     drivecycle_data_df = pd.DataFrame(drivecycle_data_dict)
@@ -704,7 +730,7 @@ for name in names:
         if len(data_df_event) < 10:
             continue
             
-        # Only consider the driving event for battery capacity estimation if >=50% of SOC has been discharged
+        # Only consider the driving event for driving range if >=50% of SOC has been discharged
         if data_df_event['socpercent'].max() - data_df_event['socpercent'].min() < 50:
             continue
             
@@ -714,12 +740,12 @@ for name in names:
             
         # Plot the raw soc vs. distance data
         fig, axs = plt.subplots(2, 1, figsize=(10, 9), gridspec_kw={'height_ratios': [2, 1]})  # 2 rows, 1 column
-        axs[0].set_title(f"{name.replace('_', ' ').capitalize()}: Driving Event {driving_event}", fontsize=18)
-        axs[1].set_xlabel('State of charge (%)', fontsize=16)
-        axs[0].set_ylabel('Distance Traveled (miles)', fontsize=16)
-        axs[1].set_ylabel('Speed (miles/hour)', fontsize=16)
-        axs[0].tick_params(axis='both', which='major', labelsize=14)
-        axs[1].tick_params(axis='both', which='major', labelsize=14)
+        #axs[0].set_title(f"{name.replace('_', ' ').capitalize()}: Driving Event {driving_event}", fontsize=18)
+        axs[1].set_xlabel('State of charge (%)', fontsize=24)
+        axs[0].set_ylabel('Distance Traveled (miles)', fontsize=24)
+        axs[1].set_ylabel('Speed (mph)', fontsize=24)
+        axs[0].tick_params(axis='both', which='major', labelsize=20)
+        axs[1].tick_params(axis='both', which='major', labelsize=20)
         
         # Add major/minor ticks and gridlines
         axs[0].xaxis.set_major_locator(MultipleLocator(20))
@@ -731,7 +757,7 @@ for name in names:
         axs[1].grid(which='minor', linestyle='--', linewidth=0.5, color='gray')
         axs[1].grid(which='major', linestyle='-', linewidth=0.5, color='black')
         
-        axs[0].scatter(data_df_event['socpercent'], data_df_event['accumulated_distance'])
+        axs[0].scatter(data_df_event['socpercent'], data_df_event['accumulated_distance'], color='black', s=50)
         axs[1].plot(data_df_event['socpercent'], data_df_event['speed'])
             
         # Evaluate a best fit line
@@ -745,6 +771,10 @@ for name in names:
         b = coefficients[1]
         slope_unc = np.sqrt(covariance[0, 0])
         b_unc = np.sqrt(covariance[1, 1])
+        
+        # Get the RMSE
+        y_pred = np.polyval(coefficients, x_values)
+        rmse = np.sqrt(np.mean((y_values - y_pred) ** 2))
         
         # The extrapolated range for linear fit is 100% x slope
         truck_range = -1 * slope * 100
@@ -766,60 +796,152 @@ for name in names:
         fuel_economy = delta_battery_energy / distance_traveled
         fuel_economy_unc = delta_battery_energy_unc / distance_traveled
         
-        drivecycle_data_df = drivecycle_data_df.append({'Driving event': int(driving_event), 'Initial battery charge (%)': battery_charge_init, 'Final battery charge (%)': battery_charge_final, 'Depth of Discharge (%)': dod, 'Range (miles)': truck_range, 'Range unc (miles)': truck_range_unc, 'Fuel economy (kWh/mile)': fuel_economy, 'Fuel economy unc (kWh/mile)': fuel_economy_unc}, ignore_index=True)
+        new_row = {
+            'Driving event': int(driving_event),
+            'Initial battery charge (%)': battery_charge_init,
+            'Final battery charge (%)': battery_charge_final,
+            'Depth of Discharge (%)': dod,
+            'Range (miles)': truck_range,
+            'Range unc (miles)': truck_range_unc,
+            'Fuel economy (kWh/mile)': fuel_economy,
+            'Fuel economy unc (kWh/mile)': fuel_economy_unc,
+            'RMSE': rmse
+        }
         
-        best_fit_line = f'Best-fit Line \ny = mx + b \nm={slope:.3f}$\pm${slope_unc:.3f}\nExtrapolated Range: {truck_range:.1f}$\pm${truck_range_unc:.1f} miles'
+        new_row_df = pd.DataFrame([new_row])
+        
+        drivecycle_data_df = pd.concat([drivecycle_data_df, new_row_df], ignore_index=True)
+                
+        best_fit_line = f"Best-fit Line \ny = mx + b \nm={slope:.3f}$\pm${slope_unc:.3f}\nRMSE: {rmse:.2f}"
+
         
         # Plot the data and best fit line
         x_plot = np.linspace(0, 100, 1000)
-        axs[0].plot(x_plot, slope * x_plot + b, color='red', label=best_fit_line)
-        axs[0].legend(fontsize=14)
+        axs[0].plot(x_plot, slope * x_plot + b, color='red', label=best_fit_line, linewidth=3)
+        axs[0].legend(fontsize=20)
+        
+        #axs[0].text(0.33, 0.25, f'Extrapolated Range: {truck_range:.1f}$\pm${truck_range_unc:.1f} kWh\nExtrapolated fuel economy: {fuel_economy:.2f}$\pm${fuel_economy_unc:.2f}', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=20)
+        fig.text(0.15, 0.45, f'Range: {truck_range:.1f}$\pm${truck_range_unc:.1f} kWh\nEnergy Economy: {fuel_economy:.2f}$\pm${fuel_economy_unc:.2f} kWh/mile', fontsize=20, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7))
         
         xmin, xmax = axs[0].get_xlim()
         axs[1].set_xlim(xmin, xmax)
         
-        axs[0].text(0.15, 0.45, f'Extrapolated fuel economy: {fuel_economy:.2f}$\pm${fuel_economy_unc:.2f}', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
-        
-        plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_distance_event_{driving_event}_linearfit.png')
+        plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_distance_event_{driving_event}_linearfit.png', dpi=300)
         plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_distance_event_{driving_event}_linearfit.pdf')
         plt.close()
 
     drivecycle_data_df['Driving event'] = drivecycle_data_df['Driving event'].astype('int')
     drivecycle_data_df.to_csv(f'tables/{name}_drivecycle_data.csv', index=False)
+"""
 
-# Calculate the average of all estimates for each truck, along with standard deviation
+# Plot the distribution of RMSE
+RMSE_cutoff = 10
+all_rmse = np.zeros(0)
 for name in names:
-    range_data_linearfit_df = pd.read_csv(f'tables/{name}_range_data_linearfit.csv')
+    drivecycle_data_df = pd.read_csv(f'tables/{name}_drivecycle_data.csv')
+    all_rmse = np.append(all_rmse, np.array(drivecycle_data_df['RMSE']))
+fig, ax = plt.subplots(figsize=(7, 6))
+ax.set_xlabel('RMSE', fontsize=24)
+ax.tick_params(axis='both', which='major', labelsize=20)
+ax.hist(all_rmse, bins=50)
+ax.axvline(RMSE_cutoff, linestyle='--', linewidth=3, color='red', label='RMSE Cutoff')
+ax.legend(fontsize=20)
+plt.tight_layout()
+plt.savefig(f'{top_dir}/plots/all_RMSE.png', dpi=300)
+plt.savefig(f'{top_dir}/plots/all_RMSE.pdf')
+
+"""
+# Plot range estimate summaries
+for name in names:
+    drivecycle_data_df = pd.read_csv(f'tables/{name}_drivecycle_data.csv')
     
-    # Calculated the average and std among all range estimates
-    mean_linearfit = np.average(range_data_linearfit_df['range'])
+    # Separate the linear from non-linear drivecycles according to RMSE
+    drivecycle_data_linear = drivecycle_data_df[drivecycle_data_df['RMSE'] < RMSE_cutoff]
+    drivecycle_data_nonlinear = drivecycle_data_df[drivecycle_data_df['RMSE'] > RMSE_cutoff]
     
-    std_linearfit = np.std(range_data_linearfit_df['range'])
+    # Calculate the average and std among all range estimates
+    mean_linear = np.average(drivecycle_data_linear['Range (miles)'])
+    mean_nonlinear = np.average(drivecycle_data_nonlinear['Range (miles)'])
     
-    # Plot all the range estimates together, along with the mean and std
+    std_linear = np.std(drivecycle_data_linear['Range (miles)'])
+    std_nonlinear = np.std(drivecycle_data_nonlinear['Range (miles)'])
+    
+    # Plot all the range estimates together, along with their means and stds
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.set_title(f"{name.replace('_', ' ').capitalize()}: Summary of Range Estimates", fontsize=18)
-    ax.set_xlabel('Driving Event', fontsize=18)
-    ax.set_ylabel('Extrapolated Range (miles)', fontsize=18)
-    ax.tick_params(axis='both', which='major', labelsize=14)
-    plt.xticks(range(len(range_data_linearfit_df['driving_event'])), labels=range_data_linearfit_df['driving_event'].astype(int))
+    #ax.set_title(f"{name.replace('_', ' ').capitalize()}: Summary of Range Estimates", fontsize=24)
+    #ax.set_xlabel('Driving Event', fontsize=18)
+    ax.set_ylabel('Extrapolated Range (miles)', fontsize=22)
+    ax.tick_params(axis='both', which='major', labelsize=18)
+    plt.xticks([])
     
-    plt.errorbar(range(len(range_data_linearfit_df['driving_event'])), range_data_linearfit_df['range'], yerr = range_data_linearfit_df['range_unc'], capsize=5, marker='o', linestyle='none', color='green')
+    # Plot the ranges evaluated for individual drivecycles, separated between linear and non-linear
+    plt.errorbar(range(len(drivecycle_data_linear['Driving event'])), drivecycle_data_linear['Range (miles)'], yerr = drivecycle_data_linear['Range unc (miles)'], capsize=5, marker='o', linestyle='none', color='blue', label='Extrapolated range (linear)')
+    
+    plt.errorbar(range(len(drivecycle_data_linear['Driving event']), len(drivecycle_data_linear['Driving event'])+len(drivecycle_data_nonlinear['Driving event'])), drivecycle_data_nonlinear['Range (miles)'], yerr = drivecycle_data_nonlinear['Range unc (miles)'], capsize=5, marker='o', linestyle='none', color='green', label='Extrapolated range (nonlinear)')
     xmin, xmax = ax.get_xlim()
-    ax.axhline(mean_linearfit, color='green', linewidth=2, label=f'Mean: {mean_linearfit:.1f}$\pm${std_linearfit:.1f}')
-    ax.fill_between(np.linspace(xmin, xmax, 100), mean_linearfit-std_linearfit, mean_linearfit+std_linearfit, color='green', alpha=0.2, edgecolor='none')
+    
+    # Plot the mean and standard deviation for both linear and non-linear drivecycles
+    ax.axhline(mean_linear, color='blue', linewidth=2, label=f'Mean (linear driveycles): {mean_linear:.1f}$\pm${std_linear:.1f}')
+    ax.fill_between(np.linspace(xmin, xmax, 100), mean_linear-std_linear, mean_linear+std_linear, color='blue', alpha=0.2, edgecolor='none')
+    
+    ax.axhline(mean_nonlinear, color='green', linewidth=2, label=f'Mean (nonlinear driveycles): {mean_nonlinear:.1f}$\pm${std_nonlinear:.1f}')
+    ax.fill_between(np.linspace(xmin, xmax, 100), mean_nonlinear-std_nonlinear, mean_nonlinear+std_nonlinear, color='green', alpha=0.2, edgecolor='none')
     
     ymin, ymax = ax.get_ylim()
     ax.set_ylim(ymin, ymax + (ymax-ymin)*0.4)
     ax.set_xlim(xmin, xmax)
-    ax.legend(fontsize=16)
+    ax.legend(fontsize=20)
     plt.tight_layout()
     plt.savefig(f'{top_dir}/plots/{name}_range_summary.png')
     plt.savefig(f'{top_dir}/plots/{name}_range_summary.pdf')
+"""
+# Plot fuel economy estimate summaries
+for name in names:
+    drivecycle_data_df = pd.read_csv(f'tables/{name}_drivecycle_data.csv')
+    
+    # Separate the linear from non-linear drivecycles according to RMSE
+    drivecycle_data_linear = drivecycle_data_df[drivecycle_data_df['RMSE'] < RMSE_cutoff]
+    drivecycle_data_nonlinear = drivecycle_data_df[drivecycle_data_df['RMSE'] > RMSE_cutoff]
+    
+    # Calculate the average and std among all range estimates
+    mean_linear = np.average(drivecycle_data_linear['Fuel economy (kWh/mile)'])
+    mean_nonlinear = np.average(drivecycle_data_nonlinear['Fuel economy (kWh/mile)'])
+    
+    std_linear = np.std(drivecycle_data_linear['Fuel economy (kWh/mile)'])
+    std_nonlinear = np.std(drivecycle_data_nonlinear['Fuel economy (kWh/mile)'])
+    
+    # Plot all the range estimates together, along with their means and stds
+    fig, ax = plt.subplots(figsize=(10, 6))
+    #ax.set_xlabel('Driving Event', fontsize=18)
+    ax.set_ylabel('Extrapolated Energy Economy (kWh/mile)', fontsize=22)
+    ax.tick_params(axis='both', which='major', labelsize=18)
+    plt.xticks([])
+    
+    # Plot the ranges evaluated for individual drivecycles, separated between linear and non-linear
+    plt.errorbar(range(len(drivecycle_data_linear['Driving event'])), drivecycle_data_linear['Fuel economy (kWh/mile)'], yerr = drivecycle_data_linear['Fuel economy unc (kWh/mile)'], capsize=5, marker='o', linestyle='none', color='blue', label='Extrapolated energy economy (linear)')
+    
+    plt.errorbar(range(len(drivecycle_data_linear['Driving event']), len(drivecycle_data_linear['Driving event'])+len(drivecycle_data_nonlinear['Driving event'])), drivecycle_data_nonlinear['Fuel economy (kWh/mile)'], yerr = drivecycle_data_nonlinear['Fuel economy unc (kWh/mile)'], capsize=5, marker='o', linestyle='none', color='green', label='Extrapolated energy economy (nonlinear)')
+    xmin, xmax = ax.get_xlim()
+    
+    # Plot the mean and standard deviation for both linear and non-linear drivecycles
+    ax.axhline(mean_linear, color='blue', linewidth=2, label=f'Mean (linear driveycles): {mean_linear:.2f}$\pm${std_linear:.2f}')
+    ax.fill_between(np.linspace(xmin, xmax, 100), mean_linear-std_linear, mean_linear+std_linear, color='blue', alpha=0.2, edgecolor='none')
+    
+    ax.axhline(mean_nonlinear, color='green', linewidth=2, label=f'Mean (nonlinear driveycles): {mean_nonlinear:.2f}$\pm${std_nonlinear:.2f}')
+    ax.fill_between(np.linspace(xmin, xmax, 100), mean_nonlinear-std_nonlinear, mean_nonlinear+std_nonlinear, color='green', alpha=0.2, edgecolor='none')
+    
+    ymin, ymax = ax.get_ylim()
+    ax.set_ylim(ymin, ymax + (ymax-ymin)*0.4)
+    ax.set_xlim(xmin, xmax)
+    ax.legend(fontsize=20)
+    plt.tight_layout()
+    plt.savefig(f'{top_dir}/plots/{name}_fuel_economy_summary.png')
+    plt.savefig(f'{top_dir}/plots/{name}_fuel_economy_summary.pdf')
     
 ###################################################################
-"""
 
+
+"""
 ########################## Drive Cycle ##########################
 for name in names:
         
@@ -875,6 +997,26 @@ for name in names:
         plt.savefig(f'{top_dir}/plots/{name}_drive_cycle_{driving_event}.pdf')
         plt.close()
         
+        # Plot the speed vs. driving time in a way that's comparable with the long-haul drivecycle
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.set_title(f"{name.replace('_', ' ').capitalize()}: Driving Event {driving_event}", fontsize=18)
+
+        # Add major/minor ticks and gridlines
+        ax.xaxis.set_major_locator(MultipleLocator(100))
+        ax.xaxis.set_minor_locator(MultipleLocator(20))
+        ax.grid(which='minor', linestyle='--', linewidth=0.5, color='gray')
+        ax.grid(which='major', linestyle='-', linewidth=0.5, color='black')
+
+        ax.set_ylabel('Speed (mph)', fontsize=18)
+        ax.set_xlabel('Driving time (minutes)', fontsize=18)
+        ax.tick_params(axis='both', which='major', labelsize=14)
+        
+        ax.plot(data_df_event['time_elapsed'], data_df_event['speed'])
+        
+        plt.savefig(f'{top_dir}/plots/{name}_drive_cycle_{driving_event}_paper.png')
+        plt.savefig(f'{top_dir}/plots/{name}_drive_cycle_{driving_event}_paper.pdf')
+        plt.close()
+        
         # Also plot the speed vs. state of charge to validate with best fit events
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.set_title(f"{name.replace('_', ' ').capitalize()}: Driving Event {driving_event}", fontsize=18)
@@ -921,33 +1063,43 @@ for name in names:
         drive_cycle_df.to_csv(f'{top_dir}/tables/{name}_drive_cycle_{driving_event}_with_distance.csv', header=['Time (s)', 'Vehicle speed (km/h)', 'Road grade (%)', 'Cumulative distance (m)'], index=False)
         
 #################################################################
-
-
+"""
 """
 ######################## Extrapolated VMT #######################
 for name in names:
     vmt_data_dict = {
         'miles_driven': [],
-        'total_time': [],d
+        'total_time': [],
         'extrapolated_vmt': []
         }
         
     vmt_data_df = pd.DataFrame(vmt_data_dict)
     data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
-    data_df_reduced = data_df.iloc[::100]
-    data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
-    data_df_reduced['timestamp'] = pd.to_datetime(data_df_reduced['timestamp'])
 
+    data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])  # Convert to datetime
+    
+    # Evaluate the timestamp in hours since start
+    min_datetime = data_df['timestamp'].min()
+    data_df['timestamp_hours'] = data_df['timestamp'].apply(
+        lambda x: float((x - min_datetime).total_seconds() / SECONDS_PER_HOUR) if pd.notna(x) else np.nan
+    )
+    
+    # Drop any hours timestamps with nans
+    data_df = data_df[data_df['timestamp_hours'].notna()]
+    data_df = data_df[~np.isinf(data_df['timestamp_hours'])]
+    
+    data_df_reduced = data_df.iloc[::100]
+        
     # Plot the charging power as a function of timestamp
-    fig, axs = plt.subplots(2, 1, figsize=(18, 6), gridspec_kw={'height_ratios': [1, 1]})  # 2 rows, 1 column
-    axs[0].set_title(name.replace('_', ' ').capitalize(), fontsize=20)
-    axs[0].plot(data_df_reduced.dropna(subset=['speed'])['timestamp'], data_df_reduced.dropna(subset=['speed'])['speed'])
-    axs[1].plot(data_df.dropna(subset=['socpercent', 'timestamp'])['timestamp'], data_df.dropna(subset=['socpercent', 'timestamp'])['socpercent'])
+    fig, axs = plt.subplots(2, 1, figsize=(18, 7), gridspec_kw={'height_ratios': [1, 1]})  # 2 rows, 1 column
+    #axs[0].set_title(name.replace('_', ' ').capitalize(), fontsize=20)
+    axs[0].plot(data_df_reduced.dropna(subset=['speed'])['timestamp_hours'], data_df_reduced.dropna(subset=['speed'])['speed'])
+    axs[1].plot(data_df.dropna(subset=['socpercent', 'timestamp_hours'])['timestamp_hours'], data_df.dropna(subset=['socpercent', 'timestamp_hours'])['socpercent'])
     
     cCharging = (data_df['activity'] == 'charging')
     
-    data_df['charging_timestamp'] = data_df['timestamp']
-    data_df['charging_timestamp'][~cCharging] = np.nan
+    data_df['charging_timestamp'] = data_df['timestamp_hours']
+    data_df.loc[~cCharging, 'charging_timestamp'] = np.nan
     
     ymin, ymax = axs[0].get_ylim()
     axs[0].fill_between(data_df['charging_timestamp'], ymin, ymax, color='green', alpha=0.2, edgecolor='none')
@@ -959,8 +1111,8 @@ for name in names:
     
     cDriving = (data_df['activity'] == 'driving')
     
-    data_df['driving_timestamp'] = data_df['timestamp']
-    data_df['driving_timestamp'][~cDriving] = np.nan
+    data_df['driving_timestamp'] = data_df['timestamp_hours']
+    data_df.loc[~cDriving, 'driving_timestamp'] = np.nan
     
     ymin, ymax = axs[0].get_ylim()
     axs[0].fill_between(data_df['driving_timestamp'], ymin, ymax, color='purple', alpha=0.2, edgecolor='none')
@@ -970,23 +1122,23 @@ for name in names:
     axs[1].fill_between(data_df['driving_timestamp'], ymin, ymax, color='purple', alpha=0.2, edgecolor='none', label='Driving')
     axs[1].set_ylim(ymin, ymax)
     
-    axs[0].set_ylabel('Speed (mph)', fontsize=18)
-    axs[1].set_ylabel('State of Charge (%)', fontsize=18)
+    axs[0].set_ylabel('Speed (mph)', fontsize=22)
+    axs[1].set_ylabel('State of Charge (%)', fontsize=22)
+    axs[1].set_xlabel('Time Elapsed (h)', fontsize=22)
     
-    axs[0].set_xlim(data_df['timestamp'].min(), data_df['timestamp'].max())
-    axs[1].set_xlim(data_df['timestamp'].min(), data_df['timestamp'].max())
+    axs[0].set_xlim(data_df['timestamp_hours'].min(), data_df['timestamp_hours'].max())
+    axs[1].set_xlim(data_df['timestamp_hours'].min(), data_df['timestamp_hours'].max())
     
     axs[0].xaxis.set_tick_params(labelbottom=False)
-    axs[0].tick_params(axis='both', which='major', labelsize=12)
+    axs[0].tick_params(axis='both', which='major', labelsize=20)
     axs[0].xaxis.set_major_locator(MaxNLocator(10))
     
-    axs[1].tick_params(axis='both', which='major', labelsize=12)
+    axs[1].tick_params(axis='both', which='major', labelsize=20)
     axs[1].xaxis.set_major_locator(MaxNLocator(10))
-    axs[1].xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
     
-    axs[1].legend(fontsize=18, bbox_to_anchor=(1.0, 0.5))
+    axs[1].legend(fontsize=22, bbox_to_anchor=(1.0, 0.5))
     plt.tight_layout()
-    plt.savefig(f'{top_dir}/plots/{name}_speed_vs_time.png')
+    plt.savefig(f'{top_dir}/plots/{name}_speed_vs_time.png', dpi=300)
     plt.close()
     
     # Plot accumulated miles traveled over time
@@ -1016,9 +1168,10 @@ for name in names:
     vmt_data_df.to_csv(f'{top_dir}/tables/{name}_vmt_data.csv', header=['Distance traveled (miles)', 'Total time (days)', 'Extrapolated Annual VMT (miles/year)'], index=False)
         
 #################################################################
+"""
 
 ############################################################################################################
-
+"""
 ################################### Extrapolated Energy Delivered per Month ################################
 for name in names:
     energy_data_dict = {
@@ -1060,5 +1213,3 @@ for name in names:
 
 ############################################################################################################
 """
-
-
