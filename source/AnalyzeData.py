@@ -8,7 +8,7 @@ from scipy import stats
 import numpy as np
 from matplotlib.ticker import (MultipleLocator, AutoMinorLocator)
 import os
-from pathlib import Path
+from common_tools import get_top_dir
 
 SECONDS_PER_HOUR = 3600.
 MINUTES_PER_DAY = 60.*24.
@@ -17,23 +17,6 @@ DISTANCE_UNCERTAINTY = 2.5*np.sqrt(2)/1600.  # Distance measurement uncertainty 
 KM_PER_MILE = 1.60934
 DAYS_PER_MONTH = 30.437
 METERS_PER_MILE = 1609.34
-
-def get_top_dir():
-    '''
-    Gets the path to the top level of the git repo (one level up from the source directory)
-        
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    top_dir (string): Path to the top level of the git repo
-    '''
-    source_path = Path(__file__).resolve()
-    source_dir = source_path.parent
-    top_dir = os.path.dirname(source_dir)
-    return top_dir
     
 # Function to calculate time difference in minutes
 def calculate_time_elapsed(row, start_time):
@@ -592,7 +575,7 @@ battery_capacity_save.to_csv('tables/pepsi_semi_battery_capacities.csv')
 ###################################################################
 """
 
-"""
+
 ################ Charging Time and Depth of Discharge #############
 for name in names:
     charging_dict = {
@@ -691,7 +674,7 @@ for name in names:
         
 ###################################################################
 
-"""
+
 ################ Drivecycle and extrapolated range ################
 
 """
