@@ -49,7 +49,7 @@ print(f"Minimum state of charge: {soc_min_av} ± {soc_min_std}")
 
 soc_max_av = combined_df["max_soc"].mean()
 soc_max_std = combined_df["max_soc"].std()
-print(f"Maximum state of charge: {soc_max_av} ± {soc_max_av}")
+print(f"Maximum state of charge: {soc_max_av} ± {soc_max_std}")
 
 dod_av = combined_df["DoD"].mean()
 dod_std = combined_df["DoD"].std()
