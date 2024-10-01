@@ -17,6 +17,7 @@ DISTANCE_UNCERTAINTY = 2.5*np.sqrt(2)/1600.  # Distance measurement uncertainty 
 KM_PER_MILE = 1.60934
 DAYS_PER_MONTH = 30.437
 METERS_PER_MILE = 1609.34
+RMSE_cutoff = 10
     
 # Function to calculate time difference in minutes
 def calculate_time_elapsed(row, start_time):
@@ -523,8 +524,9 @@ for name in names:
 
     battery_data_linear_df.to_csv(f'{top_dir}/tables/{name}_battery_data_linearfit.csv', index=False)
     battery_data_quad_df.to_csv(f'{top_dir}/tables/{name}_battery_data_quadfit.csv', index=False)
+"""
 
-
+"""
 # Calculate the weighted average of all estimates for each truck, along with standard deviation
 battery_capacity_save = pd.DataFrame({'Value': ['Mean', 'Standard Deviation']})
 battery_capacities = np.zeros(0)
@@ -575,7 +577,7 @@ battery_capacity_save.to_csv('tables/pepsi_semi_battery_capacities.csv')
 ###################################################################
 """
 
-
+"""
 ################ Charging Time and Depth of Discharge #############
 for name in names:
     charging_dict = {
@@ -610,7 +612,13 @@ for name in names:
         # Calculate the total charging time (in minutes)
         start_time = data_df_event['timestamp'].iloc[0]
         charging_time = calculate_time_elapsed(data_df_event.iloc[-1], start_time)
-        charging_df = charging_df.append({'charging_event': charging_event, 'min_soc': min_soc, 'max_soc': max_soc, 'DoD': dod, 'charging_time': charging_time}, ignore_index=True)
+        new_row = pd.DataFrame([{'charging_event': charging_event,
+                         'min_soc': min_soc,
+                         'max_soc': max_soc,
+                         'DoD': dod,
+                         'charging_time': charging_time}])
+
+        charging_df = pd.concat([charging_df, new_row], ignore_index=True)
         
         # Plot the raw soc vs. time
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -673,11 +681,11 @@ for name in names:
     plt.savefig(f'{top_dir}/plots/{name}_charging_summary.pdf')
         
 ###################################################################
+"""
 
 
 ################ Drivecycle and extrapolated range ################
 
-"""
 # Read in saved csv file with battery capacities
 battery_capacity_df = pd.read_csv('tables/pepsi_semi_battery_capacities.csv')
 for name in names:
@@ -818,7 +826,6 @@ for name in names:
 """
 
 # Plot the distribution of RMSE
-RMSE_cutoff = 10
 all_rmse = np.zeros(0)
 for name in names:
     drivecycle_data_df = pd.read_csv(f'tables/{name}_drivecycle_data.csv')
@@ -833,7 +840,6 @@ plt.tight_layout()
 plt.savefig(f'{top_dir}/plots/all_RMSE.png', dpi=300)
 plt.savefig(f'{top_dir}/plots/all_RMSE.pdf')
 
-"""
 # Plot range estimate summaries
 for name in names:
     drivecycle_data_df = pd.read_csv(f'tables/{name}_drivecycle_data.csv')
@@ -877,7 +883,7 @@ for name in names:
     plt.tight_layout()
     plt.savefig(f'{top_dir}/plots/{name}_range_summary.png')
     plt.savefig(f'{top_dir}/plots/{name}_range_summary.pdf')
-"""
+
 # Plot fuel economy estimate summaries
 for name in names:
     drivecycle_data_df = pd.read_csv(f'tables/{name}_drivecycle_data.csv')
@@ -922,7 +928,7 @@ for name in names:
     plt.savefig(f'{top_dir}/plots/{name}_fuel_economy_summary.pdf')
     
 ###################################################################
-
+"""
 
 """
 ########################## Drive Cycle ##########################
@@ -964,7 +970,7 @@ for name in names:
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.set_title(f"{name.replace('_', ' ').capitalize()}: Driving Event {driving_event}", fontsize=18)
         ax.set_ylabel('Speed (mph)', fontsize=18)
-        ax.set_xlabel('Driving time (minutes)', fontsize=18)
+        ax.set_xlabel('Drive time (minutes)', fontsize=18)
         ax.tick_params(axis='both', which='major', labelsize=14)
         
         ax.plot(data_df_event['time_elapsed'], data_df_event['speed'])
@@ -982,7 +988,7 @@ for name in names:
         
         # Plot the speed vs. driving time in a way that's comparable with the long-haul drivecycle
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.set_title(f"{name.replace('_', ' ').capitalize()}: Driving Event {driving_event}", fontsize=18)
+        #ax.set_title(f"{name.replace('_', ' ').capitalize()}: Driving Event {driving_event}", fontsize=18)
 
         # Add major/minor ticks and gridlines
         ax.xaxis.set_major_locator(MultipleLocator(100))
@@ -990,19 +996,19 @@ for name in names:
         ax.grid(which='minor', linestyle='--', linewidth=0.5, color='gray')
         ax.grid(which='major', linestyle='-', linewidth=0.5, color='black')
 
-        ax.set_ylabel('Speed (mph)', fontsize=18)
-        ax.set_xlabel('Driving time (minutes)', fontsize=18)
-        ax.tick_params(axis='both', which='major', labelsize=14)
+        ax.set_ylabel('Speed (mph)', fontsize=24)
+        ax.set_xlabel('Driving time (minutes)', fontsize=24)
+        ax.tick_params(axis='both', which='major', labelsize=20)
         
-        ax.plot(data_df_event['time_elapsed'], data_df_event['speed'])
-        
+        ax.plot(data_df_event['time_elapsed'], data_df_event['speed'], linewidth=2)
+        plt.tight_layout()
         plt.savefig(f'{top_dir}/plots/{name}_drive_cycle_{driving_event}_paper.png')
         plt.savefig(f'{top_dir}/plots/{name}_drive_cycle_{driving_event}_paper.pdf')
         plt.close()
         
         # Also plot the speed vs. state of charge to validate with best fit events
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.set_title(f"{name.replace('_', ' ').capitalize()}: Driving Event {driving_event}", fontsize=18)
+        #ax.set_title(f"{name.replace('_', ' ').capitalize()}: Driving Event {driving_event}", fontsize=18)
         ax.set_ylabel('Speed (mph)', fontsize=18)
         ax.set_xlabel('State of charge (%)', fontsize=18)
         ax.tick_params(axis='both', which='major', labelsize=14)
@@ -1047,6 +1053,7 @@ for name in names:
         
 #################################################################
 """
+
 """
 ######################## Extrapolated VMT #######################
 for name in names:
@@ -1122,6 +1129,7 @@ for name in names:
     axs[1].legend(fontsize=22, bbox_to_anchor=(1.0, 0.5))
     plt.tight_layout()
     plt.savefig(f'{top_dir}/plots/{name}_speed_vs_time.png', dpi=300)
+    plt.savefig(f'{top_dir}/plots/{name}_speed_vs_time.pdf')
     plt.close()
     
     # Plot accumulated miles traveled over time
@@ -1145,6 +1153,7 @@ for name in names:
         
     plt.tight_layout()
     plt.savefig(f'{top_dir}/plots/{name}_distance_vs_time.png')
+    plt.savefig(f'{top_dir}/plots/{name}_distance_vs_time.pdf')
     plt.close()
     
     # Save the vmt data to a csv file
@@ -1153,7 +1162,6 @@ for name in names:
 #################################################################
 """
 
-############################################################################################################
 """
 ################################### Extrapolated Energy Delivered per Month ################################
 for name in names:
