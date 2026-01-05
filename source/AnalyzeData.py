@@ -10,6 +10,18 @@ from matplotlib.ticker import (MultipleLocator, AutoMinorLocator)
 import os
 from common_tools import get_top_dir
 
+# Performance optimization flags
+FAST_MODE = True  # Set to False to generate PDFs and zoom plots (slower)
+
+# Data caching dictionary to avoid re-reading CSV files
+_csv_cache = {}
+
+def read_csv_cached(filepath, low_memory=False):
+    """Read CSV file with caching to avoid redundant reads."""
+    if filepath not in _csv_cache:
+        _csv_cache[filepath] = pd.read_csv(filepath, low_memory=low_memory)
+    return _csv_cache[filepath].copy()
+
 SECONDS_PER_HOUR = 3600.
 MINUTES_PER_DAY = 60.*24.
 DAYS_PER_YEAR = 365.
@@ -49,8 +61,7 @@ for file in files:
 
 for file in files:
     name = file.split('/')[-1].split('_spd_dist')[0]
-    names.append(name)
-    data_df = pd.read_csv(file, low_memory=False)
+    data_df = read_csv_cached(file, low_memory=False)
     
     data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
     
@@ -72,31 +83,29 @@ for file in files:
     data_df['accumulated_distance'] = data_df['distance'].cumsum()
     data_df.to_csv(f'{top_dir}/data/{name}_additional_cols.csv', index=False)
 
-"""
+
 ################################### Collect and save high-level metadata ###################################
 for name in names:
-    data_df = pd.read_csv(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
+    data_df = read_csv_cached(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
     metadata_dict = {
         'total_time': [],
         'total_miles': [],
         'total_kWh_charged': []
-        }
-        
-        # Convert timestamps to datetime
-        data_df['timestamp'] = pd.to_datetime(data_driving_df['timestamp'])
-        total_time =
-        
-    vmt_data_df = pd.DataFrame(vmt_data_dict)
+    }
+    
+    # Convert timestamps to datetime
+    data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
+    # total_time =
+    
+    # vmt_data_df = pd.DataFrame(vmt_data_dict)
 
 ############################################################################################################
-"""
-            
-"""
+
 ######################################## Analysis of charging power ########################################
 charging_powers = {}
 for name in names:
-    data_df = pd.read_csv(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
-    data_charging_df = data_df[data_df['energytype'] == 'energy_from_dc_charger']
+    data_df = read_csv_cached(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
+    data_charging_df = data_df[data_df['energytype'] == 'energy_from_dc_charger'].copy()
     data_charging_df['timestamp'] = pd.to_datetime(data_charging_df['timestamp'])
 
     # Calculate differences in accumulated energy and timestamps
@@ -148,6 +157,7 @@ fig, ax = plt.subplots(figsize=(10, 6))
 plt.boxplot(data)
 for i, mean in enumerate(means, start=1):
     plt.scatter(i, mean, color='red', marker='o', label='Mean' if i == 1 else "")
+print(names)
 plt.xticks([1, 2, 3], [name.replace('_', ' ').capitalize() for name in names])
 plt.ylabel('Charging power (kW)', fontsize=18)
 ax.tick_params(axis='both', which='major', labelsize=16)
@@ -156,9 +166,7 @@ plt.savefig(f'{top_dir}/plots/chargingpower_stats.png')
 plt.close()
     
 ############################################################################################################
-"""
 
-"""
 #################################### Instantaneous electricity per mile ####################################
 
 # Function to binned data with a step plot (don't like matplotlib's options)
@@ -186,11 +194,11 @@ def draw_binned_step(binned_data, linecolor='red', linelabel='', linewidth=2):
 binned_e_per_d_driving_dict = {}
 binned_e_per_d_driving_and_regen_dict = {}
 for name in names:
-    data_df = pd.read_csv(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
+    data_df = read_csv_cached(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
     
     # Collect data during both driving and regen
-    data_driving_df = data_df[(data_df['energytype'] == 'driving_energy') & (data_df['distance'].notna()) & (data_df['distance'] != 0)]
-    data_regen_df = data_df[(data_df['energytype'] == 'energy_regen') & (data_df['distance'].notna()) & (data_df['distance'] != 0)]
+    data_driving_df = data_df[(data_df['energytype'] == 'driving_energy') & (data_df['distance'].notna()) & (data_df['distance'] != 0)].copy()
+    data_regen_df = data_df[(data_df['energytype'] == 'energy_regen') & (data_df['distance'].notna()) & (data_df['distance'] != 0)].copy()
     
     # Convert string timestamps to python datetime format
     data_driving_df['timestamp'] = pd.to_datetime(data_driving_df['timestamp'])
@@ -267,10 +275,12 @@ for name in names:
     # Save figure (with original y lims and zoomed to help see the totals within each mph band)
     plt.tight_layout()
     plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_{name}.png')
-    plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_{name}.pdf')
+    if not FAST_MODE:
+        plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_{name}.pdf')
     ax.set_ylim(-5,10)
     plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_{name}_zoom.png')
-    plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_{name}_zoom.pdf')
+    if not FAST_MODE:
+        plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_{name}_zoom.pdf')
     
 # Plot the driving energy per distance within speed bands for all trucks together
 
@@ -306,7 +316,8 @@ for name in names:
 ax.legend(fontsize=14, loc='upper right')
 plt.tight_layout()
 plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.png')
-plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.pdf')
+if not FAST_MODE:
+    plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.pdf')
 
 ############################################################################################################
 
@@ -316,7 +327,7 @@ plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.pdf')
 ######### Add activity, driving and charging events to dataframes #########
 data_df_dict = {}
 for name in names:
-    data_df = pd.read_csv(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
+    data_df = read_csv_cached(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
     
     # Establish which periods are driving vs. charging
     data_df['activity'] = data_df['energytype'].fillna(method='ffill')
@@ -389,9 +400,7 @@ for name in names:
     
 ###########################################################################
 
-"""
 
-"""
 ######################### Energy capacity #########################
 for name in names:
     battery_data_dict = {
@@ -402,7 +411,7 @@ for name in names:
         
     battery_data_linear_df = pd.DataFrame(battery_data_dict)
     battery_data_quad_df = pd.DataFrame(battery_data_dict)
-    data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+    data_df = read_csv_cached(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
             
     # Iterate through all the charging events and plot them
     n_charging_events = int(data_df['charging_event'].max())
@@ -458,9 +467,9 @@ for name in names:
         
         battery_data_linear_df = pd.concat([battery_data_linear_df, new_row], ignore_index=True)
         
-        best_fit_line = f"Best-fit Line \ny = mx + b \nm={slope:.3f}$\pm${slope_unc:.3f}\nRMSE: {rmse:.2f}"
+        best_fit_line = rf"Best-fit Line \ny = mx + b \nm={slope:.3f}$\pm${slope_unc:.3f}\nRMSE: {rmse:.2f}"
         
-        ax.text(0.33, 0.25, f'Extrapolated Battery Size: {battery_size:.1f}$\pm${battery_size_unc:.1f} kWh', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=20)
+        ax.text(0.33, 0.25, rf'Extrapolated Battery Size: {battery_size:.1f}$\pm${battery_size_unc:.1f} kWh', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=20)
         
         # Plot the data and best fit line
         x_plot = np.linspace(0, 100, 1000)
@@ -507,9 +516,9 @@ for name in names:
         # Use concat to add the new row to the existing DataFrame
         battery_data_quad_df = pd.concat([battery_data_quad_df, new_row_quad], ignore_index=True)
         
-        best_fit_line = f"Best-fit Quadratic \ny = ax$^2$ + bx + c \na={a:.4f}$\pm${a_unc:.4f}\nb: {b:.2f}$\pm${b_unc:.2f}\nRMSE: {rmse:.2f}"
+        best_fit_line = rf"Best-fit Quadratic \ny = ax$^2$ + bx + c \na={a:.4f}$\pm${a_unc:.4f}\nb: {b:.2f}$\pm${b_unc:.2f}\nRMSE: {rmse:.2f}"
         
-        ax.text(0.33, 0.25, f'Extrapolated Battery Size: {battery_size:.1f}$\pm${battery_size_unc:.1f} kWh', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=20)
+        ax.text(0.33, 0.25, rf'Extrapolated Battery Size: {battery_size:.1f}$\pm${battery_size_unc:.1f} kWh', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=20)
         
         # Plot the data and best fit line
         x_plot = np.linspace(0, 100, 1000)
@@ -524,9 +533,7 @@ for name in names:
 
     battery_data_linear_df.to_csv(f'{top_dir}/tables/{name}_battery_data_linearfit.csv', index=False)
     battery_data_quad_df.to_csv(f'{top_dir}/tables/{name}_battery_data_quadfit.csv', index=False)
-"""
 
-"""
 # Calculate the weighted average of all estimates for each truck, along with standard deviation
 battery_capacity_save = pd.DataFrame({'Value': ['Mean', 'Standard Deviation']})
 battery_capacities = np.zeros(0)
@@ -557,7 +564,7 @@ for name in names:
     #plt.errorbar(range(len(battery_data_quadfit_df['charging_event'])), battery_data_quadfit_df['battery_size'], yerr = battery_data_quadfit_df['battery_size_unc'], capsize=5, label='Quadratic Fit', marker='o', linestyle='none', color='blue')
     plt.errorbar(range(len(battery_data_quadfit_df['charging_event'])), battery_data_quadfit_df['battery_size'], yerr = battery_data_quadfit_df['battery_size_unc'], capsize=5, marker='o', linestyle='none', color='black', label = 'Extrapolated capacity')
     xmin, xmax = ax.get_xlim()
-    ax.axhline(weighted_mean_quadfit, color='blue', linewidth=2, label=f'Weighted mean: {weighted_mean_quadfit:.1f}$\pm${weighted_std_quadfit:.1f}')
+    ax.axhline(weighted_mean_quadfit, color='blue', linewidth=2, label=rf'Weighted mean: {weighted_mean_quadfit:.1f}$\pm${weighted_std_quadfit:.1f}')
     ax.fill_between(np.linspace(xmin, xmax, 100), weighted_mean_quadfit-weighted_std_quadfit, weighted_mean_quadfit+weighted_std_quadfit, color='blue', alpha=0.2, edgecolor='none')
     
     ymin, ymax = ax.get_ylim()
@@ -575,9 +582,7 @@ battery_capacity_save['average'] = [np.mean(battery_capacities), np.std(battery_
 battery_capacity_save.to_csv('tables/pepsi_semi_battery_capacities.csv')
 
 ###################################################################
-"""
 
-"""
 ################ Charging Time and Depth of Discharge #############
 for name in names:
     charging_dict = {
@@ -589,7 +594,7 @@ for name in names:
         }
         
     charging_df = pd.DataFrame(charging_dict)
-    data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+    data_df = read_csv_cached(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
 
     n_charging_events = int(data_df['charging_event'].max())
     for charging_event in range(1, n_charging_events):
@@ -669,10 +674,10 @@ for name in names:
     ax.set_ylim(ymin, ymax + (ymax-ymin)*0.4)
     ymin, ymax = ax.get_ylim()
     
-    ax.axhline(mean_charging_time, color='green', linewidth=2, label=f'Mean charge time: {mean_charging_time:.1f}$\pm${std_charging_time:.1f} mins\nMin: {min_charging_time:.1f} minutes\nMax: {max_charging_time:.1f} minutes\n')
+    ax.axhline(mean_charging_time, color='green', linewidth=2, label=rf'Mean charge time: {mean_charging_time:.1f}$\pm${std_charging_time:.1f} mins\nMin: {min_charging_time:.1f} minutes\nMax: {max_charging_time:.1f} minutes\n')
     ax.fill_between(np.linspace(xmin, xmax, 100), mean_charging_time-std_charging_time, mean_charging_time+std_charging_time, color='green', alpha=0.2, edgecolor='none')
 
-    ax.axvline(mean_dod, color='blue', linewidth=2, label=f'Mean DoD: {mean_dod:.1f}%$\pm${std_dod:.1f}%\nMin: {min_dod:.1f}%\nMax: {max_dod:.1f}%')
+    ax.axvline(mean_dod, color='blue', linewidth=2, label=rf'Mean DoD: {mean_dod:.1f}%$\pm${std_dod:.1f}%\nMin: {min_dod:.1f}%\nMax: {max_dod:.1f}%')
     ax.fill_betweenx(np.linspace(ymin, ymax, 100), mean_dod-std_dod, mean_dod+std_dod, color='blue', alpha=0.2, edgecolor='none')
     
     ax.legend(loc='upper right', fontsize=14)
@@ -681,7 +686,6 @@ for name in names:
     plt.savefig(f'{top_dir}/plots/{name}_charging_summary.pdf')
         
 ###################################################################
-"""
 
 
 ################ Drivecycle and extrapolated range ################
@@ -702,7 +706,7 @@ for name in names:
         }
         
     drivecycle_data_df = pd.DataFrame(drivecycle_data_dict)
-    data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+    data_df = read_csv_cached(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
     
     # Read in the battery capacity for the given truck
     battery_capacity = battery_capacity_df[name].iloc[0]
@@ -803,7 +807,7 @@ for name in names:
         
         drivecycle_data_df = pd.concat([drivecycle_data_df, new_row_df], ignore_index=True)
                 
-        best_fit_line = f"Best-fit Line \ny = mx + b \nm={slope:.3f}$\pm${slope_unc:.3f}\nRMSE: {rmse:.2f}"
+        best_fit_line = rf"Best-fit Line \ny = mx + b \nm={slope:.3f}$\pm${slope_unc:.3f}\nRMSE: {rmse:.2f}"
 
         
         # Plot the data and best fit line
@@ -812,7 +816,7 @@ for name in names:
         axs[0].legend(fontsize=20)
         
         #axs[0].text(0.33, 0.25, f'Extrapolated Range: {truck_range:.1f}$\pm${truck_range_unc:.1f} kWh\nExtrapolated fuel economy: {fuel_economy:.2f}$\pm${fuel_economy_unc:.2f}', transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=20)
-        fig.text(0.15, 0.45, f'Range: {truck_range:.1f}$\pm${truck_range_unc:.1f} kWh\nEnergy Economy: {fuel_economy:.2f}$\pm${fuel_economy_unc:.2f} kWh/mile', fontsize=20, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7))
+        fig.text(0.15, 0.45, rf'Range: {truck_range:.1f}$\pm${truck_range_unc:.1f} kWh\nEnergy Economy: {fuel_economy:.2f}$\pm${fuel_economy_unc:.2f} kWh/mile', fontsize=20, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7))
         
         xmin, xmax = axs[0].get_xlim()
         axs[1].set_xlim(xmin, xmax)
@@ -823,7 +827,6 @@ for name in names:
 
     drivecycle_data_df['Driving event'] = drivecycle_data_df['Driving event'].astype('int')
     drivecycle_data_df.to_csv(f'tables/{name}_drivecycle_data.csv', index=False)
-"""
 
 # Plot the distribution of RMSE
 all_rmse = np.zeros(0)
@@ -870,10 +873,10 @@ for name in names:
     xmin, xmax = ax.get_xlim()
     
     # Plot the mean and standard deviation for both linear and non-linear drivecycles
-    ax.axhline(mean_linear, color='blue', linewidth=2, label=f'Mean (linear driveycles): {mean_linear:.1f}$\pm${std_linear:.1f}')
+    ax.axhline(mean_linear, color='blue', linewidth=2, label=rf'Mean (linear driveycles): {mean_linear:.1f}$\pm${std_linear:.1f}')
     ax.fill_between(np.linspace(xmin, xmax, 100), mean_linear-std_linear, mean_linear+std_linear, color='blue', alpha=0.2, edgecolor='none')
     
-    ax.axhline(mean_nonlinear, color='green', linewidth=2, label=f'Mean (nonlinear driveycles): {mean_nonlinear:.1f}$\pm${std_nonlinear:.1f}')
+    ax.axhline(mean_nonlinear, color='green', linewidth=2, label=rf'Mean (nonlinear driveycles): {mean_nonlinear:.1f}$\pm${std_nonlinear:.1f}')
     ax.fill_between(np.linspace(xmin, xmax, 100), mean_nonlinear-std_nonlinear, mean_nonlinear+std_nonlinear, color='green', alpha=0.2, edgecolor='none')
     
     ymin, ymax = ax.get_ylim()
@@ -913,10 +916,10 @@ for name in names:
     xmin, xmax = ax.get_xlim()
     
     # Plot the mean and standard deviation for both linear and non-linear drivecycles
-    ax.axhline(mean_linear, color='blue', linewidth=2, label=f'Mean (linear driveycles): {mean_linear:.2f}$\pm${std_linear:.2f}')
+    ax.axhline(mean_linear, color='blue', linewidth=2, label=rf'Mean (linear driveycles): {mean_linear:.2f}$\pm${std_linear:.2f}')
     ax.fill_between(np.linspace(xmin, xmax, 100), mean_linear-std_linear, mean_linear+std_linear, color='blue', alpha=0.2, edgecolor='none')
     
-    ax.axhline(mean_nonlinear, color='green', linewidth=2, label=f'Mean (nonlinear driveycles): {mean_nonlinear:.2f}$\pm${std_nonlinear:.2f}')
+    ax.axhline(mean_nonlinear, color='green', linewidth=2, label=rf'Mean (nonlinear driveycles): {mean_nonlinear:.2f}$\pm${std_nonlinear:.2f}')
     ax.fill_between(np.linspace(xmin, xmax, 100), mean_nonlinear-std_nonlinear, mean_nonlinear+std_nonlinear, color='green', alpha=0.2, edgecolor='none')
     
     ymin, ymax = ax.get_ylim()
@@ -928,13 +931,11 @@ for name in names:
     plt.savefig(f'{top_dir}/plots/{name}_fuel_economy_summary.pdf')
     
 ###################################################################
-"""
 
-"""
 ########################## Drive Cycle ##########################
 for name in names:
         
-    data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+    data_df = read_csv_cached(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
         
     # Iterate through all the driving events and plot them
     n_driving_events = int(data_df['driving_event'].max())
@@ -1052,9 +1053,9 @@ for name in names:
         drive_cycle_df.to_csv(f'{top_dir}/tables/{name}_drive_cycle_{driving_event}_with_distance.csv', header=['Time (s)', 'Vehicle speed (km/h)', 'Road grade (%)', 'Cumulative distance (m)'], index=False)
         
 #################################################################
-"""
 
-"""
+
+
 ######################## Extrapolated VMT #######################
 for name in names:
     vmt_data_dict = {
@@ -1064,7 +1065,7 @@ for name in names:
         }
         
     vmt_data_df = pd.DataFrame(vmt_data_dict)
-    data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+    data_df = read_csv_cached(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
 
     data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])  # Convert to datetime
     
@@ -1160,9 +1161,7 @@ for name in names:
     vmt_data_df.to_csv(f'{top_dir}/tables/{name}_vmt_data.csv', header=['Distance traveled (miles)', 'Total time (days)', 'Extrapolated Annual VMT (miles/year)'], index=False)
         
 #################################################################
-"""
 
-"""
 ################################### Extrapolated Energy Delivered per Month ################################
 for name in names:
     energy_data_dict = {
@@ -1172,7 +1171,7 @@ for name in names:
         }
         
     energy_data_df = pd.DataFrame(energy_data_dict)
-    data_df = pd.read_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+    data_df = read_csv_cached(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
     data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
     data_df_charging = data_df[data_df['energytype'] == 'energy_from_dc_charger']
         
@@ -1203,4 +1202,4 @@ for name in names:
     energy_data_df.to_csv(f'{top_dir}/tables/{name}_energy_per_month_data.csv', header=['Energy Delivered (kWh)', 'Total time (days)', 'Extrapolated Energy Delivered/Month (kWh/month)'], index=False)
 
 ############################################################################################################
-"""
+
