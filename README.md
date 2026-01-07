@@ -1,4 +1,4 @@
-[![DOI](https://zenodo.org/badge/747760752.svg)](https://zenodo.org/doi/10.5281/zenodo.13173389)
+[![DOI](https://zenodo.org/badge/750992867.svg)](https://zenodo.org/doi/10.5281/zenodo.13173389)
 
 # Analysis of PepsiCo Data from the NACFE Run On Less Electric Pilot
 
