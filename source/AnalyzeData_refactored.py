@@ -2,8 +2,12 @@
 PepsiCo NACFE Data Analysis Script
 Refactored with modular functions for easier development and iteration.
 
+DATASET_TYPE: Choose 'pepsi' or 'messy_middle' to analyze either dataset
+  - 'pepsi': Analyzes Pepsi 1/2/3 trucks (data/)
+  - 'messy_middle': Analyzes joyride/4gen/nevoya (data_messy_middle/)
+
 Toggle each analysis section by commenting/uncommenting in the main() function.
-Set FAST_MODE = True for quick iteration (no PDFs), False for complete output.
+Set FAST_MODE = True for quick iteration (PNG only), False for PNG + PDF output.
 """
 
 import pandas as pd
@@ -21,12 +25,14 @@ from common_tools import get_top_dir
 # CONFIGURATION
 # ============================================================================
 FAST_MODE = True  # Set to False to generate PDFs and zoom plots (slower)
+DATASET_TYPE = 'messy_middle'  # 'pepsi' or 'messy_middle'
 
 SECONDS_PER_HOUR = 3600.
 MINUTES_PER_DAY = 60.*24.
 DAYS_PER_YEAR = 365.
 DISTANCE_UNCERTAINTY = 2.5*np.sqrt(2)/1600.
 KM_PER_MILE = 1.60934
+KM_TO_MILES = 0.621371
 DAYS_PER_MONTH = 30.437
 METERS_PER_MILE = 1609.34
 RMSE_cutoff = 10
@@ -51,21 +57,47 @@ def calculate_time_elapsed(row, start_time):
 
 def setup_directories(top_dir):
     """Create necessary directories for data, tables, and plots."""
-    for directory in ['data', 'tables', 'plots']:
+    if DATASET_TYPE == 'pepsi':
+        directories = ['data', 'tables', 'plots']
+    else:  # messy_middle
+        directories = ['data_messy_middle', 'tables_messy', 'plots_messy']
+    
+    for directory in directories:
         dirpath = f'{top_dir}/{directory}'
         if not os.path.exists(dirpath):
             os.makedirs(dirpath)
             print(f"Created directory: {dirpath}")
 
 def get_file_list(top_dir):
-    """Get list of input CSV files and truck names."""
-    files = [
-        f'{top_dir}/data/pepsi_1_spd_dist_soc_cs_is_er.csv',
-        f'{top_dir}/data/pepsi_2_spd_dist_cs_is_er.csv',
-        f'{top_dir}/data/pepsi_3_spd_dist_cs_is_er.csv'
-    ]
-    names = [file.split('/')[-1].split('_spd_dist')[0] for file in files]
+    """Get list of input CSV files and truck names based on dataset type."""
+    if DATASET_TYPE == 'pepsi':
+        files = [
+            f'{top_dir}/data/pepsi_1_spd_dist_soc_cs_is_er.csv',
+            f'{top_dir}/data/pepsi_2_spd_dist_cs_is_er.csv',
+            f'{top_dir}/data/pepsi_3_spd_dist_cs_is_er.csv'
+        ]
+        names = [file.split('/')[-1].split('_spd_dist')[0] for file in files]
+    else:  # messy_middle
+        files = [
+            f'{top_dir}/data_messy_middle/joyride.csv',
+            f'{top_dir}/data_messy_middle/4gen.csv',
+            f'{top_dir}/data_messy_middle/nevoya.csv'
+        ]
+        names = ['joyride', '4gen', 'nevoya']
+    
     return files, names
+
+def get_output_dir(top_dir, subdir):
+    """Get output directory based on dataset type."""
+    if DATASET_TYPE == 'pepsi':
+        return f'{top_dir}/{subdir}'
+    else:  # messy_middle
+        if subdir == 'tables':
+            return f'{top_dir}/tables_messy'
+        elif subdir == 'plots':
+            return f'{top_dir}/plots_messy'
+        else:
+            return f'{top_dir}/data_messy_middle'
 
 def draw_binned_step(binned_data, linecolor='red', linelabel='', linewidth=2):
     """Helper function to plot binned data with a step plot."""
@@ -89,6 +121,50 @@ def draw_binned_step(binned_data, linecolor='red', linelabel='', linewidth=2):
         previous_bin_mid = bin_mid
         previous_data_value = data
 
+def get_column_name(df, possible_names):
+    """Find the first available column from a list of possible names."""
+    for name in possible_names:
+        if name in df.columns:
+            return name
+    return None
+
+def normalize_data(df):
+    """Normalize data from either Pepsi or messy middle format to a common structure."""
+    df = df.copy()
+    
+    if DATASET_TYPE == 'messy_middle':
+        # Convert distance from KM to miles
+        distance_col = get_column_name(df, ['distance_km', 'distance'])
+        if distance_col:
+            df['distance'] = df[distance_col] * KM_TO_MILES
+        
+        # Map battery percentage column
+        soc_col = get_column_name(df, ['battery_percent', 'socpercent', 'soc'])
+        if soc_col and soc_col != 'socpercent':
+            df['socpercent'] = df[soc_col]
+        
+        # For messy middle, energy_from_charge_kwh is already accumulated within each charging event
+        # Just rename it - don't cumsum it again
+        if 'accumumlatedkwh' not in df.columns:
+            if 'energy_from_charge_kwh' in df.columns:
+                df['accumumlatedkwh'] = df['energy_from_charge_kwh'].fillna(0)
+            else:
+                df['accumumlatedkwh'] = 0.0
+        
+        # Map activity to energytype-like structure
+        if 'truck_activity' in df.columns:
+            df['energytype'] = df['truck_activity']
+        
+        # Normalize speed (convert from kmh to mph)
+        speed_col = get_column_name(df, ['speed_kmh', 'speed_mph', 'speed', 'avg_speed'])
+        if speed_col:
+            if 'kmh' in speed_col.lower() or 'km' in speed_col.lower():
+                df['speed'] = df[speed_col] * KM_TO_MILES
+            else:
+                df['speed'] = df[speed_col]
+    
+    return df
+
 # ============================================================================
 # ANALYSIS FUNCTIONS
 # ============================================================================
@@ -102,24 +178,34 @@ def preprocess_data(top_dir, files, names):
     for file, name in zip(files, names):
         print(f"Processing {name}...")
         data_df = read_csv_cached(file, low_memory=False)
+        data_df = normalize_data(data_df)
         data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
         
-        # Remove events after SOC measurement stops
-        data_with_soc = data_df[~data_df['socpercent'].isna()]
-        max_timestamp_with_soc = data_with_soc['timestamp'].max()
-        data_df = data_df[data_df['timestamp'] < max_timestamp_with_soc]
-        
-        # For Pepsi 1, remove events after last charging on Sept 16
-        if name == 'pepsi_1':
-            lt_date = pd.Timestamp('2023-09-17 00:00:00', tz='UTC')
-            data_df = data_df[data_df['timestamp'] < lt_date]
-            data_charging_df = data_df[~data_df['energytype'].isna()]
-            max_charging_timestamp = data_charging_df['timestamp'].max()
-            data_df = data_df[data_df['timestamp'] < max_charging_timestamp]
+        if DATASET_TYPE == 'pepsi':
+            # Remove events after SOC measurement stops
+            data_with_soc = data_df[~data_df['socpercent'].isna()]
+            max_timestamp_with_soc = data_with_soc['timestamp'].max()
+            data_df = data_df[data_df['timestamp'] < max_timestamp_with_soc]
+            
+            # For Pepsi 1, remove events after last charging on Sept 16
+            if name == 'pepsi_1':
+                lt_date = pd.Timestamp('2023-09-17 00:00:00', tz='UTC')
+                data_df = data_df[data_df['timestamp'] < lt_date]
+                data_charging_df = data_df[~data_df['energytype'].isna()]
+                max_charging_timestamp = data_charging_df['timestamp'].max()
+                data_df = data_df[data_df['timestamp'] < max_charging_timestamp]
+        else:  # messy_middle
+            # Remove rows with no SOC data
+            data_with_soc = data_df[~data_df['socpercent'].isna()]
+            if len(data_with_soc) > 0:
+                max_timestamp_with_soc = data_with_soc['timestamp'].max()
+                data_df = data_df[data_df['timestamp'] <= max_timestamp_with_soc]
         
         # Calculate accumulated distance
-        data_df['accumulated_distance'] = data_df['distance'].cumsum()
-        data_df.to_csv(f'{top_dir}/data/{name}_additional_cols.csv', index=False)
+        data_df['accumulated_distance'] = data_df['distance'].fillna(0).cumsum()
+        
+        output_dir = get_output_dir(top_dir, 'data')
+        data_df.to_csv(f'{output_dir}/{name}_additional_cols.csv', index=False)
         print(f"  ✓ Saved {name}_additional_cols.csv")
 
 def analyze_charging_power(top_dir, names):
@@ -129,12 +215,19 @@ def analyze_charging_power(top_dir, names):
     print("="*70)
     
     charging_powers = {}
+    output_dir = get_output_dir(top_dir, 'data')
+    plot_dir = get_output_dir(top_dir, 'plots')
     
     for name in names:
         print(f"Processing {name}...")
-        data_df = read_csv_cached(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
-        data_charging_df = data_df[data_df['energytype'] == 'energy_from_dc_charger'].copy()
-        data_charging_df['timestamp'] = pd.to_datetime(data_charging_df['timestamp'])
+        data_df = read_csv_cached(f'{output_dir}/{name}_additional_cols.csv', low_memory=False)
+        data_df = normalize_data(data_df)
+        data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
+        
+        if DATASET_TYPE == 'pepsi':
+            data_charging_df = data_df[data_df['energytype'] == 'energy_from_dc_charger'].copy()
+        else:  # messy_middle
+            data_charging_df = data_df[data_df['truck_activity'] == 'charging'].copy()
 
         # Calculate power differences
         data_charging_df['accumulatedkwh_diffs'] = data_charging_df['accumumlatedkwh'] - data_charging_df['accumumlatedkwh'].shift(1)
@@ -151,12 +244,12 @@ def analyze_charging_power(top_dir, names):
         plt.plot(data_charging_df['timestamp'], data_charging_df['charging_power'], 'o', markersize=1)
         plt.ylabel('Charging power (kW)', fontsize=18)
         ax.tick_params(axis='both', which='major', labelsize=12)
-        plt.savefig(f'{top_dir}/plots/{name}_chargingpower_vs_time.png')
+        plt.savefig(f'{plot_dir}/{name}_chargingpower_vs_time.png')
         plt.close()
         print(f"  ✓ Saved charging power plot for {name}")
    
     # Calculate statistics
-    data = [charging_powers['pepsi_1'], charging_powers['pepsi_2'], charging_powers['pepsi_3']]
+    data = [charging_powers[name] for name in names]
     means = [np.mean(d) for d in data]
     maxes = [np.max(d) for d in data]
     mins = [np.min(d) for d in data]
@@ -179,7 +272,7 @@ def analyze_charging_power(top_dir, names):
     plt.ylabel('Charging power (kW)', fontsize=18)
     ax.tick_params(axis='both', which='major', labelsize=16)
     plt.legend(fontsize=16)
-    plt.savefig(f'{top_dir}/plots/chargingpower_stats.png')
+    plt.savefig(f'{plot_dir}/chargingpower_stats.png')
     plt.close()
     print("\n  ✓ Saved charging power statistics plot")
 
@@ -191,10 +284,13 @@ def analyze_instantaneous_energy(top_dir, names):
     
     binned_e_per_d_driving_dict = {}
     binned_e_per_d_driving_and_regen_dict = {}
+    output_dir = get_output_dir(top_dir, 'data')
+    plot_dir = get_output_dir(top_dir, 'plots')
     
     for name in names:
         print(f"Processing {name}...")
-        data_df = read_csv_cached(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
+        data_df = read_csv_cached(f'{output_dir}/{name}_additional_cols.csv', low_memory=False)
+        data_df = normalize_data(data_df)
         
         # Separate driving and regen data
         data_driving_df = data_df[(data_df['energytype'] == 'driving_energy') & 
@@ -255,13 +351,13 @@ def analyze_instantaneous_energy(top_dir, names):
         
         ax.legend(fontsize=14, loc='upper right')
         plt.tight_layout()
-        plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_{name}.png')
+        plt.savefig(f'{plot_dir}/energy_by_speed_{name}.png')
         if not FAST_MODE:
-            plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_{name}.pdf')
+            plt.savefig(f'{plot_dir}/energy_by_speed_{name}.pdf')
         ax.set_ylim(-5,10)
-        plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_{name}_zoom.png')
+        plt.savefig(f'{plot_dir}/energy_by_speed_{name}_zoom.png')
         if not FAST_MODE:
-            plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_{name}_zoom.pdf')
+            plt.savefig(f'{plot_dir}/energy_by_speed_{name}_zoom.pdf')
         plt.close()
         print(f"  ✓ Saved energy per distance plots for {name}")
     
@@ -286,9 +382,9 @@ def analyze_instantaneous_energy(top_dir, names):
     
     ax.legend(fontsize=14, loc='upper right')
     plt.tight_layout()
-    plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.png')
+    plt.savefig(f'{plot_dir}/energy_by_speed_all.png')
     if not FAST_MODE:
-        plt.savefig(f'{top_dir}/plots/driving_energy_per_distance_all.pdf')
+        plt.savefig(f'{plot_dir}/energy_by_speed_all.pdf')
     plt.close()
     print("  ✓ Saved combined energy per distance plot")
 
@@ -298,15 +394,21 @@ def prepare_driving_charging_data(top_dir, names):
     print("PREPARING DRIVING/CHARGING EVENT DATA")
     print("="*70)
     
+    output_dir = get_output_dir(top_dir, 'data')
+    
     for name in names:
         print(f"Processing {name}...")
-        data_df = read_csv_cached(f'{top_dir}/data/{name}_additional_cols.csv', low_memory=False)
+        data_df = read_csv_cached(f'{output_dir}/{name}_additional_cols.csv', low_memory=False)
+        data_df = normalize_data(data_df)
         
         # Label activities
-        data_df['activity'] = data_df['energytype'].ffill()
-        data_df.loc[data_df['activity'] == 'energy_from_dc_charger', 'activity'] = 'charging'
-        data_df.loc[data_df['activity'] == 'driving_energy', 'activity'] = 'driving'
-        data_df.loc[data_df['activity'] == 'energy_regen', 'activity'] = 'driving'
+        if DATASET_TYPE == 'pepsi':
+            data_df['activity'] = data_df['energytype'].ffill()
+            data_df.loc[data_df['activity'] == 'energy_from_dc_charger', 'activity'] = 'charging'
+            data_df.loc[data_df['activity'] == 'driving_energy', 'activity'] = 'driving'
+            data_df.loc[data_df['activity'] == 'energy_regen', 'activity'] = 'driving'
+        else:  # messy_middle
+            data_df['activity'] = data_df['truck_activity'].ffill()
         data_df = data_df.dropna(subset=['activity'])
         
         # Add event numbers
@@ -349,7 +451,7 @@ def prepare_driving_charging_data(top_dir, names):
                 if pd.notna(prev_value) and pd.notna(next_value):
                     data_df.at[index, 'accumumlatedkwh'] = (prev_value + next_value) / 2
                     
-        data_df.to_csv(f'{top_dir}/data/{name}_with_driving_charging.csv', index=False)
+        data_df.to_csv(f'{output_dir}/{name}_with_driving_charging.csv', index=False)
         print(f"  ✓ Saved {name}_with_driving_charging.csv")
 
 def analyze_battery_capacity(top_dir, names):
@@ -359,6 +461,15 @@ def analyze_battery_capacity(top_dir, names):
     print("="*70)
     
     battery_capacities = []
+    output_dir = get_output_dir(top_dir, 'data')
+    plot_dir = get_output_dir(top_dir, 'plots')
+    table_dir = get_output_dir(top_dir, 'tables')
+    
+    # Determine correct filenames based on dataset type
+    if DATASET_TYPE == 'pepsi':
+        battery_quadfit_suffix = '_battery_data_quadfit.csv'
+    else:  # messy_middle
+        battery_quadfit_suffix = '_battery_data_quadfit.csv'
     
     for name in names:
         print(f"Processing {name}...")
@@ -370,7 +481,7 @@ def analyze_battery_capacity(top_dir, names):
         
         battery_data_linear_df = pd.DataFrame(battery_data_dict)
         battery_data_quad_df = pd.DataFrame(battery_data_dict)
-        data_df = read_csv_cached(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+        data_df = read_csv_cached(f'{output_dir}/{name}_with_driving_charging.csv', low_memory=False)
         
         n_charging_events = int(data_df['charging_event'].max())
         for charging_event in range(1, n_charging_events):
@@ -415,9 +526,9 @@ def analyze_battery_capacity(top_dir, names):
             plt.plot(x_plot, slope * x_plot + b, color='red', label=best_fit_line, linewidth=3)
             plt.legend(fontsize=20)
             plt.tight_layout()
-            plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_energy_event_{charging_event}_linearfit.png')
+            plt.savefig(f'{plot_dir}/{name}_battery_soc_vs_energy_event_{charging_event}_linearfit.png')
             if not FAST_MODE:
-                plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_energy_event_{charging_event}_linearfit.pdf')
+                plt.savefig(f'{plot_dir}/{name}_battery_soc_vs_energy_event_{charging_event}_linearfit.pdf')
             plt.close()
             
             # Quadratic Fit
@@ -452,16 +563,16 @@ def analyze_battery_capacity(top_dir, names):
             plt.plot(x_plot, a * x_plot**2 + b * x_plot + c, color='red', label=best_fit_line, linewidth=3)
             plt.legend(fontsize=20)
             plt.tight_layout()
-            plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_energy_event_{charging_event}_quadfit.png')
+            plt.savefig(f'{plot_dir}/{name}_battery_soc_vs_energy_event_{charging_event}_quadfit.png')
             if not FAST_MODE:
-                plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_energy_event_{charging_event}_quadfit.pdf')
+                plt.savefig(f'{plot_dir}/{name}_battery_soc_vs_energy_event_{charging_event}_quadfit.pdf')
             plt.close()
         
-        battery_data_linear_df.to_csv(f'{top_dir}/tables/{name}_battery_data_linearfit.csv', index=False)
-        battery_data_quad_df.to_csv(f'{top_dir}/tables/{name}_battery_data_quadfit.csv', index=False)
+        battery_data_linear_df.to_csv(f'{table_dir}/{name}_battery_data_linearfit.csv', index=False)
+        battery_data_quad_df.to_csv(f'{table_dir}/{name}_battery_data_quadfit.csv', index=False)
         
         # Calculate weighted averages
-        battery_data_quadfit_df = pd.read_csv(f'{top_dir}/tables/{name}_battery_data_quadfit.csv')
+        battery_data_quadfit_df = pd.read_csv(f'{table_dir}/{name}_battery_data_quadfit.csv')
         weighted_mean_quadfit = np.average(battery_data_quadfit_df['battery_size'], 
                                           weights=1./battery_data_quadfit_df['battery_size_unc']**2)
         weighted_std_quadfit = np.sqrt(np.average((battery_data_quadfit_df['battery_size']-weighted_mean_quadfit)**2, 
@@ -500,7 +611,7 @@ def analyze_battery_capacity(top_dir, names):
     # Save battery capacities
     battery_capacity_save = pd.DataFrame({'Value': ['Mean', 'Standard Deviation']})
     for i, name in enumerate(names):
-        battery_data_quadfit_df = pd.read_csv(f'{top_dir}/tables/{name}_battery_data_quadfit.csv')
+        battery_data_quadfit_df = pd.read_csv(f'{table_dir}/{name}_battery_data_quadfit.csv')
         weighted_mean = np.average(battery_data_quadfit_df['battery_size'], 
                                   weights=1./battery_data_quadfit_df['battery_size_unc']**2)
         weighted_std = np.sqrt(np.average((battery_data_quadfit_df['battery_size']-weighted_mean)**2, 
@@ -508,7 +619,7 @@ def analyze_battery_capacity(top_dir, names):
         battery_capacity_save[name] = [weighted_mean, weighted_std]
     
     battery_capacity_save['average'] = [np.mean(battery_capacities), np.std(battery_capacities)]
-    battery_capacity_save.to_csv('tables/pepsi_semi_battery_capacities.csv')
+    battery_capacity_save.to_csv(f'{table_dir}/battery_capacities.csv')
     print("  ✓ Saved battery capacities summary")
 
 def analyze_charging_time_dod(top_dir, names):
@@ -516,6 +627,10 @@ def analyze_charging_time_dod(top_dir, names):
     print("\n" + "="*70)
     print("ANALYZING CHARGING TIME AND DEPTH OF DISCHARGE")
     print("="*70)
+    
+    output_dir = get_output_dir(top_dir, 'data')
+    plot_dir = get_output_dir(top_dir, 'plots')
+    table_dir = get_output_dir(top_dir, 'tables')
     
     for name in names:
         print(f"Processing {name}...")
@@ -528,7 +643,7 @@ def analyze_charging_time_dod(top_dir, names):
         }
         
         charging_df = pd.DataFrame(charging_dict)
-        data_df = read_csv_cached(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+        data_df = read_csv_cached(f'{output_dir}/{name}_with_driving_charging.csv', low_memory=False)
 
         n_charging_events = int(data_df['charging_event'].max())
         for charging_event in range(1, n_charging_events):
@@ -566,12 +681,12 @@ def analyze_charging_time_dod(top_dir, names):
             
             charging_time_elapsed = data_df_event.apply(calculate_time_elapsed, axis=1, args=(start_time,))
             ax.scatter(charging_time_elapsed, data_df_event['socpercent'])
-            plt.savefig(f'{top_dir}/plots/{name}_time_vs_battery_soc_event_{charging_event}.png')
+            plt.savefig(f'{plot_dir}/{name}_time_vs_battery_soc_event_{charging_event}.png')
             if not FAST_MODE:
-                plt.savefig(f'{top_dir}/plots/{name}_time_vs_battery_soc_event_{charging_event}.pdf')
+                plt.savefig(f'{plot_dir}/{name}_time_vs_battery_soc_event_{charging_event}.pdf')
             plt.close()
         
-        charging_df.to_csv(f'{top_dir}/tables/{name}_charging_time_data.csv', index=False)
+        charging_df.to_csv(f'{table_dir}/{name}_charging_time_data.csv', index=False)
         
         # Plot summary statistics
         mean_charging_time = np.average(charging_df['charging_time'])
@@ -611,9 +726,9 @@ def analyze_charging_time_dod(top_dir, names):
         
         ax.legend(loc='upper right', fontsize=14)
         plt.tight_layout()
-        plt.savefig(f'{top_dir}/plots/{name}_charging_summary.png')
+        plt.savefig(f'{plot_dir}/{name}_charging_summary.png')
         if not FAST_MODE:
-            plt.savefig(f'{top_dir}/plots/{name}_charging_summary.pdf')
+            plt.savefig(f'{plot_dir}/{name}_charging_summary.pdf')
         plt.close()
         print(f"  ✓ Saved charging time analysis for {name}")
 
@@ -623,8 +738,12 @@ def analyze_drive_cycles(top_dir, names):
     print("ANALYZING DRIVE CYCLES")
     print("="*70)
     
+    output_dir = get_output_dir(top_dir, 'data')
+    plot_dir = get_output_dir(top_dir, 'plots')
+    table_dir = get_output_dir(top_dir, 'tables')
+    
     # Read battery capacities
-    battery_capacity_df = pd.read_csv(f'{top_dir}/tables/pepsi_semi_battery_capacities.csv')
+    battery_capacity_df = pd.read_csv(f'{table_dir}/battery_capacities.csv')
     
     for name in names:
         print(f"Processing {name}...")
@@ -641,7 +760,7 @@ def analyze_drive_cycles(top_dir, names):
         }
         
         drivecycle_data_df = pd.DataFrame(drivecycle_data_dict)
-        data_df = read_csv_cached(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+        data_df = read_csv_cached(f'{output_dir}/{name}_with_driving_charging.csv', low_memory=False)
         
         battery_capacity = battery_capacity_df[name].iloc[0]
         battery_capacity_unc = battery_capacity_df[name].iloc[1]
@@ -725,19 +844,19 @@ def analyze_drive_cycles(top_dir, names):
             xmin, xmax = axs[0].get_xlim()
             axs[1].set_xlim(xmin, xmax)
             
-            plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_distance_event_{driving_event}_linearfit.png', dpi=300)
+            plt.savefig(f'{plot_dir}/{name}_battery_soc_vs_distance_event_{driving_event}_linearfit.png', dpi=300)
             if not FAST_MODE:
-                plt.savefig(f'{top_dir}/plots/{name}_battery_soc_vs_distance_event_{driving_event}_linearfit.pdf')
+                plt.savefig(f'{plot_dir}/{name}_battery_soc_vs_distance_event_{driving_event}_linearfit.pdf')
             plt.close()
 
         drivecycle_data_df['Driving event'] = drivecycle_data_df['Driving event'].astype('int')
-        drivecycle_data_df.to_csv(f'tables/{name}_drivecycle_data.csv', index=False)
+        drivecycle_data_df.to_csv(f'{table_dir}/{name}_drivecycle_data.csv', index=False)
         print(f"  ✓ Saved drive cycle analysis for {name}")
     
     # Plot RMSE distribution
     all_rmse = np.zeros(0)
     for name in names:
-        drivecycle_data_df = pd.read_csv(f'tables/{name}_drivecycle_data.csv')
+        drivecycle_data_df = pd.read_csv(f'{table_dir}/{name}_drivecycle_data.csv')
         all_rmse = np.append(all_rmse, np.array(drivecycle_data_df['RMSE']))
     
     fig, ax = plt.subplots(figsize=(7, 6))
@@ -747,14 +866,14 @@ def analyze_drive_cycles(top_dir, names):
     ax.axvline(RMSE_cutoff, linestyle='--', linewidth=3, color='red', label='RMSE Cutoff')
     ax.legend(fontsize=20)
     plt.tight_layout()
-    plt.savefig(f'{top_dir}/plots/all_RMSE.png', dpi=300)
+    plt.savefig(f'{plot_dir}/all_RMSE.png', dpi=300)
     if not FAST_MODE:
-        plt.savefig(f'{top_dir}/plots/all_RMSE.pdf')
+        plt.savefig(f'{plot_dir}/all_RMSE.pdf')
     plt.close()
     
     # Plot range and fuel economy summaries
     for name in names:
-        drivecycle_data_df = pd.read_csv(f'tables/{name}_drivecycle_data.csv')
+        drivecycle_data_df = pd.read_csv(f'{table_dir}/{name}_drivecycle_data.csv')
         
         drivecycle_data_linear = drivecycle_data_df[drivecycle_data_df['RMSE'] < RMSE_cutoff]
         drivecycle_data_nonlinear = drivecycle_data_df[drivecycle_data_df['RMSE'] > RMSE_cutoff]
@@ -793,9 +912,9 @@ def analyze_drive_cycles(top_dir, names):
         ax.set_xlim(xmin, xmax)
         ax.legend(fontsize=20)
         plt.tight_layout()
-        plt.savefig(f'{top_dir}/plots/{name}_range_summary.png')
+        plt.savefig(f'{plot_dir}/{name}_range_summary.png')
         if not FAST_MODE:
-            plt.savefig(f'{top_dir}/plots/{name}_range_summary.pdf')
+            plt.savefig(f'{plot_dir}/{name}_range_summary.pdf')
         plt.close()
         
         # Fuel economy summary
@@ -833,9 +952,9 @@ def analyze_drive_cycles(top_dir, names):
         ax.set_xlim(xmin, xmax)
         ax.legend(fontsize=20)
         plt.tight_layout()
-        plt.savefig(f'{top_dir}/plots/{name}_fuel_economy_summary.png')
+        plt.savefig(f'{plot_dir}/{name}_fuel_economy_summary.png')
         if not FAST_MODE:
-            plt.savefig(f'{top_dir}/plots/{name}_fuel_economy_summary.pdf')
+            plt.savefig(f'{plot_dir}/{name}_fuel_economy_summary.pdf')
         plt.close()
 
 def analyze_vmt(top_dir, names):
@@ -843,6 +962,10 @@ def analyze_vmt(top_dir, names):
     print("\n" + "="*70)
     print("ANALYZING VEHICLE MILES TRAVELED (VMT)")
     print("="*70)
+    
+    output_dir = get_output_dir(top_dir, 'data')
+    plot_dir = get_output_dir(top_dir, 'plots')
+    table_dir = get_output_dir(top_dir, 'tables')
     
     for name in names:
         print(f"Processing {name}...")
@@ -853,7 +976,7 @@ def analyze_vmt(top_dir, names):
         }
         
         vmt_data_df = pd.DataFrame(vmt_data_dict)
-        data_df = read_csv_cached(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+        data_df = read_csv_cached(f'{output_dir}/{name}_with_driving_charging.csv', low_memory=False)
         data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
         
         min_datetime = data_df['timestamp'].min()
@@ -910,9 +1033,9 @@ def analyze_vmt(top_dir, names):
         
         axs[1].legend(fontsize=22, bbox_to_anchor=(1.0, 0.5))
         plt.tight_layout()
-        plt.savefig(f'{top_dir}/plots/{name}_speed_vs_time.png', dpi=300)
+        plt.savefig(f'{plot_dir}/{name}_speed_vs_time.png', dpi=300)
         if not FAST_MODE:
-            plt.savefig(f'{top_dir}/plots/{name}_speed_vs_time.pdf')
+            plt.savefig(f'{plot_dir}/{name}_speed_vs_time.pdf')
         plt.close()
         
         # Plot accumulated distance vs time
@@ -942,7 +1065,7 @@ def analyze_vmt(top_dir, names):
             plt.savefig(f'{top_dir}/plots/{name}_distance_vs_time.pdf')
         plt.close()
         
-        vmt_data_df.to_csv(f'{top_dir}/tables/{name}_vmt_data.csv', 
+        vmt_data_df.to_csv(f'{table_dir}/{name}_vmt_data.csv', 
                           header=['Distance traveled (miles)', 'Total time (days)', 'Extrapolated Annual VMT (miles/year)'], index=False)
         print(f"  ✓ Saved VMT analysis for {name}")
 
@@ -951,6 +1074,10 @@ def analyze_energy_delivered(top_dir, names):
     print("\n" + "="*70)
     print("ANALYZING ENERGY DELIVERED PER MONTH")
     print("="*70)
+    
+    output_dir = get_output_dir(top_dir, 'data')
+    plot_dir = get_output_dir(top_dir, 'plots')
+    table_dir = get_output_dir(top_dir, 'tables')
     
     for name in names:
         print(f"Processing {name}...")
@@ -961,7 +1088,7 @@ def analyze_energy_delivered(top_dir, names):
         }
         
         energy_data_df = pd.DataFrame(energy_data_dict)
-        data_df = read_csv_cached(f'{top_dir}/data/{name}_with_driving_charging.csv', low_memory=False)
+        data_df = read_csv_cached(f'{output_dir}/{name}_with_driving_charging.csv', low_memory=False)
         data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
         data_df_charging = data_df[data_df['energytype'] == 'energy_from_dc_charger']
         
@@ -987,12 +1114,12 @@ def analyze_energy_delivered(top_dir, names):
                 transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
         
         plt.tight_layout()
-        plt.savefig(f'{top_dir}/plots/{name}_charging_energy_vs_time.png')
+        plt.savefig(f'{plot_dir}/{name}_charging_energy_vs_time.png')
         if not FAST_MODE:
-            plt.savefig(f'{top_dir}/plots/{name}_charging_energy_vs_time.pdf')
+            plt.savefig(f'{plot_dir}/{name}_charging_energy_vs_time.pdf')
         plt.close()
         
-        energy_data_df.to_csv(f'{top_dir}/tables/{name}_energy_per_month_data.csv', 
+        energy_data_df.to_csv(f'{table_dir}/{name}_energy_per_month_data.csv', 
                              header=['Energy Delivered (kWh)', 'Total time (days)', 'Extrapolated Energy/Month (kWh/month)'], index=False)
         print(f"  ✓ Saved energy delivered analysis for {name}")
 
@@ -1008,7 +1135,7 @@ def main():
     files, names = get_file_list(top_dir)
     
     print("\n" + "="*70)
-    print("PEPSICO NACFE ANALYSIS - REFACTORED")
+    print(f"ANALYZING {DATASET_TYPE.upper()} DATA")
     print(f"FAST_MODE: {FAST_MODE}")
     print("="*70)
     
