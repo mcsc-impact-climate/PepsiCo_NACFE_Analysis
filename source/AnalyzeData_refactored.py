@@ -274,7 +274,7 @@ def analyze_charging_power(top_dir, names):
     plt.legend(fontsize=16)
     plt.savefig(f'{plot_dir}/chargingpower_stats.png')
     plt.close()
-    print("\n  ✓ Saved charging power statistics plot")
+    print(f"\n  ✓ Saved {DATASET_TYPE} charging power statistics plot")
 
 def analyze_instantaneous_energy(top_dir, names):
     """Analyze instantaneous energy consumption per mile."""
@@ -386,7 +386,7 @@ def analyze_instantaneous_energy(top_dir, names):
     if not FAST_MODE:
         plt.savefig(f'{plot_dir}/energy_by_speed_all.pdf')
     plt.close()
-    print("  ✓ Saved combined energy per distance plot")
+    print(f"  ✓ Saved {DATASET_TYPE} combined energy per distance plot")
 
 def prepare_driving_charging_data(top_dir, names):
     """Prepare data with driving and charging event labels."""
@@ -620,7 +620,7 @@ def analyze_battery_capacity(top_dir, names):
     
     battery_capacity_save['average'] = [np.mean(battery_capacities), np.std(battery_capacities)]
     battery_capacity_save.to_csv(f'{table_dir}/battery_capacities.csv')
-    print("  ✓ Saved battery capacities summary")
+    print(f"  ✓ Saved {DATASET_TYPE} battery capacities summary")
 
 def analyze_charging_time_dod(top_dir, names):
     """Analyze charging time and depth of discharge."""
@@ -773,6 +773,12 @@ def analyze_drive_cycles(top_dir, names):
             if len(data_df_event) < 10 or (data_df_event['socpercent'].max() - data_df_event['socpercent'].min()) < 50:
                 continue
             
+            # Convert timestamp to datetime and calculate time_elapsed
+            data_df_event = data_df_event.copy()
+            data_df_event['timestamp'] = pd.to_datetime(data_df_event['timestamp'])
+            start_time = data_df_event['timestamp'].iloc[0]
+            data_df_event['time_elapsed'] = data_df_event.apply(calculate_time_elapsed, axis=1, args=(start_time,))
+            
             # Plot driving profile
             fig, axs = plt.subplots(2, 1, figsize=(10, 9), gridspec_kw={'height_ratios': [2, 1]})
             axs[1].set_xlabel('State of charge (%)', fontsize=24)
@@ -847,6 +853,68 @@ def analyze_drive_cycles(top_dir, names):
             plt.savefig(f'{plot_dir}/{name}_battery_soc_vs_distance_event_{driving_event}_linearfit.png', dpi=300)
             if not FAST_MODE:
                 plt.savefig(f'{plot_dir}/{name}_battery_soc_vs_distance_event_{driving_event}_linearfit.pdf')
+            plt.close()
+            
+            # Plot 1b: Basic speed vs. driving time plot
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.set_title(f"{name.replace('_', ' ').capitalize()}: Driving Event {driving_event}", fontsize=18)
+            ax.set_ylabel('Speed (mph)', fontsize=18)
+            ax.set_xlabel('Drive time (minutes)', fontsize=18)
+            ax.tick_params(axis='both', which='major', labelsize=14)
+            
+            ax.plot(data_df_event['time_elapsed'], data_df_event['speed'])
+            
+            ymin, ymax = ax.get_ylim()
+            ax.set_ylim(ymin, ymax + (ymax-ymin)*0.6)
+            total_drive_time = (data_df_event['time_elapsed'].max() - data_df_event['time_elapsed'].min())
+            total_drive_time_hours = total_drive_time / 60.
+            
+            plt.text(0.45, 0.65, f'Total drive time: {total_drive_time_hours:.1f} hours\nInitial Battery Charge: {battery_charge_init:.1f}%\nFinal Battery Charge: {battery_charge_final:.1f}%\nDepth of Discharge: {dod:.1f}%', 
+                    transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
+            
+            plt.savefig(f'{plot_dir}/{name}_drive_cycle_{driving_event}.png')
+            if not FAST_MODE:
+                plt.savefig(f'{plot_dir}/{name}_drive_cycle_{driving_event}.pdf')
+            plt.close()
+            
+            # Plot 2: Speed vs. driving time (paper-format drive cycle)
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.xaxis.set_major_locator(MultipleLocator(100))
+            ax.xaxis.set_minor_locator(MultipleLocator(20))
+            ax.grid(which='minor', linestyle='--', linewidth=0.5, color='gray')
+            ax.grid(which='major', linestyle='-', linewidth=0.5, color='black')
+            ax.set_ylabel('Speed (mph)', fontsize=24)
+            ax.set_xlabel('Driving time (minutes)', fontsize=24)
+            ax.tick_params(axis='both', which='major', labelsize=20)
+            
+            ax.plot(data_df_event['time_elapsed'], data_df_event['speed'], linewidth=2)
+            plt.tight_layout()
+            plt.savefig(f'{plot_dir}/{name}_drive_cycle_{driving_event}_paper.png')
+            if not FAST_MODE:
+                plt.savefig(f'{plot_dir}/{name}_drive_cycle_{driving_event}_paper.pdf')
+            plt.close()
+            
+            # Plot 3: Speed vs. state of charge
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.set_ylabel('Speed (mph)', fontsize=18)
+            ax.set_xlabel('State of charge (%)', fontsize=18)
+            ax.tick_params(axis='both', which='major', labelsize=14)
+            
+            data_df_event_plot = data_df_event.dropna(subset=['socpercent'])
+            ax.plot(data_df_event_plot['socpercent'], data_df_event_plot['speed'])
+            
+            ymin, ymax = ax.get_ylim()
+            ax.set_ylim(ymin, ymax + (ymax-ymin)*0.6)
+            
+            total_drive_time = (data_df_event['time_elapsed'].max() - data_df_event['time_elapsed'].min())
+            total_drive_time_hours = total_drive_time / 60.
+            
+            plt.text(0.45, 0.65, f'Total drive time: {total_drive_time_hours:.1f} hours\nInitial Battery Charge: {battery_charge_init:.1f}%\nFinal Battery Charge: {battery_charge_final:.1f}%\nDepth of Discharge: {dod:.1f}%', 
+                    transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
+            
+            plt.savefig(f'{plot_dir}/{name}_drive_cycle_soc_{driving_event}.png')
+            if not FAST_MODE:
+                plt.savefig(f'{plot_dir}/{name}_drive_cycle_soc_{driving_event}.pdf')
             plt.close()
 
         drivecycle_data_df['Driving event'] = drivecycle_data_df['Driving event'].astype('int')
