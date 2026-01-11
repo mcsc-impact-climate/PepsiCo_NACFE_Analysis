@@ -25,6 +25,7 @@ from common_tools import get_top_dir
 # CONFIGURATION
 # ============================================================================
 FAST_MODE = True  # Set to False to generate PDFs and zoom plots (slower)
+NO_PLOT_MODE = False  # Set to True to skip plot generation (fastest - data only)
 DATASET_TYPE = 'messy_middle'  # 'pepsi' or 'messy_middle'
 
 SECONDS_PER_HOUR = 3600.
@@ -54,6 +55,15 @@ def calculate_time_elapsed(row, start_time):
     """Calculate time difference in minutes from a start time."""
     time_difference_seconds = (row['timestamp'] - start_time).total_seconds()
     return time_difference_seconds / 60.
+
+def save_plot(filepath, pdf_path=None):
+    """Save a plot, respecting NO_PLOT_MODE and FAST_MODE settings."""
+    if NO_PLOT_MODE:
+        return
+    plt.savefig(filepath, dpi=300)
+    if not FAST_MODE and pdf_path:
+        plt.savefig(pdf_path)
+
 
 def setup_directories(top_dir):
     """Create necessary directories for data, tables, and plots."""
@@ -214,6 +224,10 @@ def analyze_charging_power(top_dir, names):
     print("ANALYZING CHARGING POWER")
     print("="*70)
     
+    if NO_PLOT_MODE:
+        print("(Skipping analysis - NO_PLOT_MODE is enabled)")
+        return
+    
     charging_powers = {}
     output_dir = get_output_dir(top_dir, 'data')
     plot_dir = get_output_dir(top_dir, 'plots')
@@ -281,6 +295,10 @@ def analyze_instantaneous_energy(top_dir, names):
     print("\n" + "="*70)
     print("ANALYZING INSTANTANEOUS ENERGY PER MILE")
     print("="*70)
+    
+    if NO_PLOT_MODE:
+        print("(Skipping analysis - NO_PLOT_MODE is enabled)")
+        return
     
     binned_e_per_d_driving_dict = {}
     binned_e_per_d_driving_and_regen_dict = {}
@@ -396,6 +414,11 @@ def prepare_driving_charging_data(top_dir, names):
     
     output_dir = get_output_dir(top_dir, 'data')
     
+    # Define time gap thresholds (in minutes) to split events
+    # If there's a gap larger than this, it starts a new event
+    TIME_GAP_THRESHOLD_CHARGING = 30  # 30 minutes for charging
+    TIME_GAP_THRESHOLD_DRIVING = 60   # 60 minutes for driving (increased from 15 min)
+    
     for name in names:
         print(f"Processing {name}...")
         data_df = read_csv_cached(f'{output_dir}/{name}_additional_cols.csv', low_memory=False)
@@ -408,8 +431,21 @@ def prepare_driving_charging_data(top_dir, names):
             data_df.loc[data_df['activity'] == 'driving_energy', 'activity'] = 'driving'
             data_df.loc[data_df['activity'] == 'energy_regen', 'activity'] = 'driving'
         else:  # messy_middle
-            data_df['activity'] = data_df['truck_activity'].ffill()
+            # For messy_middle, map activities intelligently:
+            # - 'charging' stays 'charging'
+            # - 'driving' stays 'driving'
+            # - 'idling' and 'inactive' are treated as missing for activity assignment
+            # but we'll propagate the previous charging/driving state through these periods
+            data_df['activity'] = data_df['truck_activity'].copy()
+            data_df.loc[data_df['activity'] == 'charging', 'activity'] = 'charging'
+            data_df.loc[data_df['activity'] == 'driving', 'activity'] = 'driving'
+            # Forward fill to carry charging/driving through idling/inactive periods
+            data_df['activity'] = data_df['activity'].ffill()
+        
         data_df = data_df.dropna(subset=['activity'])
+        
+        # Convert timestamp to datetime for time gap calculation
+        data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
         
         # Add event numbers
         data_df['charging_event'] = np.nan
@@ -419,28 +455,62 @@ def prepare_driving_charging_data(top_dir, names):
         driving_event = 0
         prev_activity = data_df.at[data_df.index[0], 'activity']
         prev_soc = -1.
+        prev_timestamp = data_df.at[data_df.index[0], 'timestamp']
+        force_new_charging_event = False
+        force_new_driving_event = False
 
         for index, row in data_df.iterrows():
             current_activity = row['activity']
             current_soc = row['socpercent']
+            current_timestamp = row['timestamp']
             
+            # Calculate time gap in minutes from previous row
+            time_gap_minutes = (current_timestamp - prev_timestamp).total_seconds() / 60.0
+            
+            # Check for large time gaps or SOC drops (indicates pause or charger off)
+            large_gap_charging = time_gap_minutes > TIME_GAP_THRESHOLD_CHARGING
+            large_gap_driving = time_gap_minutes > TIME_GAP_THRESHOLD_DRIVING
+            soc_decreased_significantly = current_soc < (prev_soc - 2)  # 2% tolerance
+            
+            # If we were charging and now have a large gap or SOC drop, mark for new event
+            if prev_activity == 'charging' and (large_gap_charging or soc_decreased_significantly):
+                force_new_charging_event = True
+            
+            # If we were driving and now have a large gap, mark for new event
+            if prev_activity == 'driving' and large_gap_driving:
+                force_new_driving_event = True
+            
+            # Check for invalid charging (SOC decreases during charging)
             if current_activity == 'charging' and current_soc <= prev_soc:
                 current_activity = np.nan
                 data_df.at[index, 'activity'] = np.nan
                 current_activity = 'driving'
             
+            # Assign charging events with gap detection
             if current_activity == 'charging':
-                if prev_activity == 'driving' or not isinstance(prev_activity, str):
+                # Start new charging event if:
+                # 1. Coming from driving/idling/inactive activity, OR
+                # 2. Force flag is set (large gap or SOC drop occurred)
+                if (prev_activity not in ['charging'] or 
+                    force_new_charging_event):
                     charging_event += 1
+                    force_new_charging_event = False
                 data_df.at[index, 'charging_event'] = charging_event
             
+            # Assign driving events with gap detection
             if current_activity == 'driving':
-                if prev_activity == 'charging' or prev_activity == np.nan:
+                # Start new driving event if:
+                # 1. Coming from charging/idling/inactive activity, OR
+                # 2. Force flag is set (large gap occurred)
+                if (prev_activity not in ['driving'] or
+                    force_new_driving_event):
                     driving_event += 1
+                    force_new_driving_event = False
                 data_df.at[index, 'driving_event'] = driving_event
                 
             prev_activity = current_activity
             prev_soc = current_soc
+            prev_timestamp = current_timestamp
             
             # Interpolate single NaN rows in accumumlatedkwh
             if pd.notna(row['accumumlatedkwh']):
@@ -459,6 +529,10 @@ def analyze_battery_capacity(top_dir, names):
     print("\n" + "="*70)
     print("ANALYZING BATTERY CAPACITY")
     print("="*70)
+    
+    if NO_PLOT_MODE:
+        print("(Skipping analysis - NO_PLOT_MODE is enabled)")
+        return
     
     battery_capacities = []
     output_dir = get_output_dir(top_dir, 'data')
@@ -628,6 +702,10 @@ def analyze_charging_time_dod(top_dir, names):
     print("ANALYZING CHARGING TIME AND DEPTH OF DISCHARGE")
     print("="*70)
     
+    if NO_PLOT_MODE:
+        print("(Skipping analysis - NO_PLOT_MODE is enabled)")
+        return
+    
     output_dir = get_output_dir(top_dir, 'data')
     plot_dir = get_output_dir(top_dir, 'plots')
     table_dir = get_output_dir(top_dir, 'tables')
@@ -737,6 +815,10 @@ def analyze_drive_cycles(top_dir, names):
     print("\n" + "="*70)
     print("ANALYZING DRIVE CYCLES")
     print("="*70)
+    
+    if NO_PLOT_MODE:
+        print("(Skipping analysis - NO_PLOT_MODE is enabled)")
+        return
     
     output_dir = get_output_dir(top_dir, 'data')
     plot_dir = get_output_dir(top_dir, 'plots')
@@ -1031,6 +1113,10 @@ def analyze_vmt(top_dir, names):
     print("ANALYZING VEHICLE MILES TRAVELED (VMT)")
     print("="*70)
     
+    if NO_PLOT_MODE:
+        print("(Skipping analysis - NO_PLOT_MODE is enabled)")
+        return
+    
     output_dir = get_output_dir(top_dir, 'data')
     plot_dir = get_output_dir(top_dir, 'plots')
     table_dir = get_output_dir(top_dir, 'tables')
@@ -1142,6 +1228,10 @@ def analyze_energy_delivered(top_dir, names):
     print("\n" + "="*70)
     print("ANALYZING ENERGY DELIVERED PER MONTH")
     print("="*70)
+    
+    if NO_PLOT_MODE:
+        print("(Skipping analysis - NO_PLOT_MODE is enabled)")
+        return
     
     output_dir = get_output_dir(top_dir, 'data')
     plot_dir = get_output_dir(top_dir, 'plots')
