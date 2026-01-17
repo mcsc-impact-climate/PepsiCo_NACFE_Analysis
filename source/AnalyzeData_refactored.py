@@ -95,12 +95,12 @@ def get_file_list(top_dir):
     else:  # messy_middle
         files = [
             f'{top_dir}/data_messy_middle/joyride.csv',
-            f'{top_dir}/data_messy_middle/4gen.csv',
-            f'{top_dir}/data_messy_middle/nevoya.csv',
-            f'{top_dir}/data_messy_middle/saia1_with_elevation.csv',
-            f'{top_dir}/data_messy_middle/saia2_with_elevation.csv'
+            # f'{top_dir}/data_messy_middle/4gen.csv',
+            # f'{top_dir}/data_messy_middle/nevoya.csv',
+            # f'{top_dir}/data_messy_middle/saia1_with_elevation.csv',
+            # f'{top_dir}/data_messy_middle/saia2_with_elevation.csv'
         ]
-        names = ['joyride', '4gen', 'nevoya', 'saia1', 'saia2']
+        names = ['joyride']#, '4gen', 'nevoya', 'saia1', 'saia2']
     
     return files, names
 
@@ -973,6 +973,9 @@ def analyze_drive_cycles(top_dir, names):
         drivecycle_data_df = pd.DataFrame(drivecycle_data_dict)
         data_df = read_csv_cached(f'{output_dir}/{name}_with_driving_charging.csv', low_memory=False)
         
+        # Also load the additional_cols file to get elevation/road_grade data
+        data_df_additional = read_csv_cached(f'{output_dir}/{name}_additional_cols.csv', low_memory=False)
+        
         battery_capacity = battery_capacity_df[name].iloc[0]
         battery_capacity_unc = battery_capacity_df[name].iloc[1]
         
@@ -1124,6 +1127,61 @@ def analyze_drive_cycles(top_dir, names):
             if not FAST_MODE:
                 plt.savefig(f'{plot_dir}/{name}_drive_cycle_soc_{driving_event}.pdf')
             plt.close()
+            
+            # Plot 4: Three-panel elevation/grade/speed plot
+            # Get corresponding data from additional_cols (which has elevation/road_grade)
+            data_df_event_with_elevation = data_df_additional.iloc[data_df_event.index]
+            
+            elevation_col = get_column_name(data_df_event_with_elevation, ['elevation_final_m', 'elevation_meters'])
+            if elevation_col and 'road_grade_percent' in data_df_event_with_elevation.columns:
+                # Check if we have valid elevation and grade data
+                elevation_valid = data_df_event_with_elevation[elevation_col].notna().sum() > 0
+                grade_valid = data_df_event_with_elevation['road_grade_percent'].notna().sum() > 0
+                
+                if elevation_valid and grade_valid:
+                    fig, axs = plt.subplots(3, 1, figsize=(14, 10), gridspec_kw={'height_ratios': [1, 1, 1]})
+                    
+                    # Panel 1: Speed vs time
+                    data_speed_plot = data_df_event.dropna(subset=['speed'])
+                    axs[0].plot(data_speed_plot['time_elapsed'], data_speed_plot['speed'], 
+                               linewidth=2, color='steelblue')
+                    axs[0].set_ylabel('Speed (mph)', fontsize=16)
+                    axs[0].grid(True, alpha=0.3)
+                    axs[0].tick_params(axis='both', which='major', labelsize=12)
+                    axs[0].xaxis.set_tick_params(labelbottom=False)
+                    
+                    # Panel 2: Elevation vs time
+                    elev_mask = data_df_event_with_elevation[elevation_col].notna()
+                    if elev_mask.sum() > 0:
+                        time_for_elev = data_df_event.loc[elev_mask, 'time_elapsed']
+                        elev_values = data_df_event_with_elevation.loc[elev_mask, elevation_col]
+                        axs[1].plot(time_for_elev, elev_values, linewidth=2, color='darkorange')
+                    axs[1].set_ylabel('Elevation (meters)', fontsize=16)
+                    axs[1].grid(True, alpha=0.3)
+                    axs[1].tick_params(axis='both', which='major', labelsize=12)
+                    axs[1].xaxis.set_tick_params(labelbottom=False)
+                    
+                    # Panel 3: Road grade vs time
+                    grade_mask = data_df_event_with_elevation['road_grade_percent'].notna()
+                    if grade_mask.sum() > 0:
+                        time_for_grade = data_df_event.loc[grade_mask, 'time_elapsed']
+                        grade_values = data_df_event_with_elevation.loc[grade_mask, 'road_grade_percent']
+                        axs[2].plot(time_for_grade, grade_values, linewidth=2, color='darkgreen')
+                    axs[2].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+                    axs[2].set_ylabel('Road Grade (%)', fontsize=16)
+                    axs[2].set_xlabel('Drive time (minutes)', fontsize=16)
+                    axs[2].grid(True, alpha=0.3)
+                    axs[2].tick_params(axis='both', which='major', labelsize=12)
+                    
+                    # Add title
+                    fig.suptitle(f"{name.replace('_', ' ').capitalize()}: Drive Cycle {driving_event} - Speed, Elevation, and Grade", 
+                                fontsize=16, fontweight='bold')
+                    
+                    plt.tight_layout()
+                    plt.savefig(f'{plot_dir}/{name}_drive_cycle_{driving_event}_elevation_grade.png', dpi=300)
+                    if not FAST_MODE:
+                        plt.savefig(f'{plot_dir}/{name}_drive_cycle_{driving_event}_elevation_grade.pdf')
+                    plt.close()
 
         drivecycle_data_df['Driving event'] = drivecycle_data_df['Driving event'].astype('int')
         drivecycle_data_df.to_csv(f'{table_dir}/{name}_drivecycle_data.csv', index=False)
@@ -1436,8 +1494,8 @@ def main():
     
     # ======== UNCOMMENT/COMMENT SECTIONS TO RUN ========
     
-    # # Stage 1: Data Preprocessing
-    # preprocess_data(top_dir, files, names)
+    # Stage 1: Data Preprocessing
+    preprocess_data(top_dir, files, names)
     
     # Stage 1.5: Elevation and Road Grade Analysis
     analyze_elevation_grade(top_dir, names)
