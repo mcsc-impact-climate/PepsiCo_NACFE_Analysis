@@ -100,8 +100,14 @@ def get_file_list(top_dir):
             f'{top_dir}/data_messy_middle/saia1_with_elevation.csv',
             f'{top_dir}/data_messy_middle/saia2_with_elevation.csv'
         ]
-        #names = ['joyride']
-        names = ['joyride', '4gen', 'nevoya', 'saia1', 'saia2']
+        # Derive names from filenames (strip extension and optional suffixes)
+        import os
+        names = []
+        for f in files:
+            base = os.path.basename(f)
+            name = base.split('.')[0]
+            name = name.replace('_with_elevation', '')
+            names.append(name)
     
     return files, names
 
@@ -1231,10 +1237,17 @@ def analyze_drive_cycles(top_dir, names):
                     axs[0].xaxis.set_tick_params(labelbottom=False)
                     
                     # Panel 2: Elevation vs time
+                    # Prefer smoothed elevation to align with grade computation
+                    elev_smooth_available = 'elevation_smooth' in data_df_event_with_elevation_core.columns and \
+                        data_df_event_with_elevation_core['elevation_smooth'].notna().sum() > 0
+
                     elev_mask = data_df_event_with_elevation_core[elevation_col].notna()
                     if elev_mask.sum() > 0:
                         time_for_elev = data_df_event_core.loc[elev_mask, 'time_elapsed']
-                        elev_values = data_df_event_with_elevation_core.loc[elev_mask, elevation_col]
+                        if elev_smooth_available:
+                            elev_values = data_df_event_with_elevation_core.loc[elev_mask, 'elevation_smooth']
+                        else:
+                            elev_values = data_df_event_with_elevation_core.loc[elev_mask, elevation_col]
                         axs[1].plot(time_for_elev, elev_values, linewidth=2, color='darkorange')
                     axs[1].set_ylabel('Elevation (meters)', fontsize=16)
                     axs[1].grid(True, alpha=0.3)
@@ -1628,29 +1641,29 @@ def main():
     # Stage 1.5: Elevation and Road Grade Analysis
     analyze_elevation_grade(top_dir, names)
     
-    # Stage 2: Charging Analysis
-    analyze_charging_power(top_dir, names)
+    # # Stage 2: Charging Analysis
+    # analyze_charging_power(top_dir, names)
     
-    # Stage 3: Energy Analysis
-    analyze_instantaneous_energy(top_dir, names)
+    # # Stage 3: Energy Analysis
+    # analyze_instantaneous_energy(top_dir, names)
     
-    # Stage 4: Prepare Driving/Charging Events
-    prepare_driving_charging_data(top_dir, names)
+    # # Stage 4: Prepare Driving/Charging Events
+    # prepare_driving_charging_data(top_dir, names)
     
-    # Stage 5: Battery Capacity Analysis
-    analyze_battery_capacity(top_dir, names)
+    # # Stage 5: Battery Capacity Analysis
+    # analyze_battery_capacity(top_dir, names)
     
-    # Stage 6: Charging Time & DoD
-    analyze_charging_time_dod(top_dir, names)
+    # # Stage 6: Charging Time & DoD
+    # analyze_charging_time_dod(top_dir, names)
     
     # Stage 7: Drive Cycles
     analyze_drive_cycles(top_dir, names)
     
-    # Stage 8: VMT Analysis
-    analyze_vmt(top_dir, names)
+    # # Stage 8: VMT Analysis
+    # analyze_vmt(top_dir, names)
     
-    # Stage 9: Energy Delivered
-    analyze_energy_delivered(top_dir, names)
+    # # Stage 9: Energy Delivered
+    # analyze_energy_delivered(top_dir, names)
     
     # ====================================================
     
