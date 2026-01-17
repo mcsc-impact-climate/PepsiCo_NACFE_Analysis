@@ -95,12 +95,13 @@ def get_file_list(top_dir):
     else:  # messy_middle
         files = [
             f'{top_dir}/data_messy_middle/joyride.csv',
-            # f'{top_dir}/data_messy_middle/4gen.csv',
-            # f'{top_dir}/data_messy_middle/nevoya.csv',
-            # f'{top_dir}/data_messy_middle/saia1_with_elevation.csv',
-            # f'{top_dir}/data_messy_middle/saia2_with_elevation.csv'
+            f'{top_dir}/data_messy_middle/4gen.csv',
+            f'{top_dir}/data_messy_middle/nevoya.csv',
+            f'{top_dir}/data_messy_middle/saia1_with_elevation.csv',
+            f'{top_dir}/data_messy_middle/saia2_with_elevation.csv'
         ]
-        names = ['joyride']#, '4gen', 'nevoya', 'saia1', 'saia2']
+        #names = ['joyride']
+        names = ['joyride', '4gen', 'nevoya', 'saia1', 'saia2']
     
     return files, names
 
@@ -224,23 +225,63 @@ def preprocess_data(top_dir, files, names):
         # Calculate road grade from elevation data
         elevation_col = get_column_name(data_df, ['elevation_final_m', 'elevation_meters'])
         if elevation_col:
-            # Smooth elevation data using rolling window to reduce noise
-            # Window of 5 points typically corresponds to ~5 seconds of data
-            data_df['elevation_smooth'] = data_df[elevation_col].rolling(window=5, center=True).mean()
-            # Calculate elevation change and distance change
+            from scipy.signal import savgol_filter
+            
+            # Smooth elevation with Savitzky-Golay (better edge handling than rolling mean)
+            elevation_valid = data_df[elevation_col].notna()
+            if elevation_valid.sum() > 11:  # Need at least 12 points for window=9
+                elev_array = data_df.loc[elevation_valid, elevation_col].values
+                elev_smooth_array = savgol_filter(elev_array, window_length=9, polyorder=2)
+                data_df.loc[elevation_valid, 'elevation_smooth'] = elev_smooth_array
+                data_df['elevation_smooth'] = data_df['elevation_smooth'].ffill().bfill()
+            else:
+                data_df['elevation_smooth'] = data_df[elevation_col].rolling(window=5, center=True).mean()
+            
+            # Use accumulated distance deltas to avoid tiny step artifacts
+            dist_step_miles = data_df['accumulated_distance'].diff().fillna(0)
+            data_df['distance_change_meters'] = dist_step_miles * METERS_PER_MILE
             data_df['elevation_change'] = data_df['elevation_smooth'].diff()
-            data_df['distance_change_miles'] = data_df['distance'].fillna(0)
-            # Convert distance from miles to meters for grade calculation
-            data_df['distance_change_meters'] = data_df['distance_change_miles'] * METERS_PER_MILE
-            # Calculate road grade: grade (%) = (elevation_change / distance) * 100
-            # Avoid division by zero
-            data_df['road_grade_percent'] = np.where(
-                data_df['distance_change_meters'] != 0,
-                (data_df['elevation_change'] / data_df['distance_change_meters']) * 100,
-                0
+            
+            # Thresholds to suppress spikes from tiny movements / near-zero speed
+            min_distance_threshold = 0.01  # ~16 meters
+            min_speed_threshold = 2.0      # mph
+            speed_ok = data_df['speed'].fillna(0) > min_speed_threshold
+            dist_ok = data_df['distance_change_meters'].abs() > min_distance_threshold
+            valid_grade = speed_ok & dist_ok & data_df['elevation_change'].notna()
+            
+            # Initial grade calculation
+            data_df['road_grade_percent'] = np.nan
+            data_df.loc[valid_grade, 'road_grade_percent'] = (
+                data_df.loc[valid_grade, 'elevation_change'] /
+                data_df.loc[valid_grade, 'distance_change_meters']
+            ) * 100.0
+            
+            # Median filter to remove single-sample spikes
+            data_df['road_grade_percent'] = (
+                data_df['road_grade_percent']
+                .rolling(window=5, center=True, min_periods=1)
+                .median()
             )
+            
+            # Smooth the grade values to reduce residual noise (Savitzky-Golay then clip)
+            grade_valid = data_df['road_grade_percent'].notna()
+            if grade_valid.sum() > 9:
+                grade_array = data_df.loc[grade_valid, 'road_grade_percent'].values
+                try:
+                    grade_smooth_array = savgol_filter(grade_array, window_length=9, polyorder=2)
+                    data_df.loc[grade_valid, 'road_grade_percent'] = grade_smooth_array
+                except ValueError:
+                    # Fallback to rolling mean if not enough points
+                    data_df.loc[grade_valid, 'road_grade_percent'] = (
+                        data_df.loc[grade_valid, 'road_grade_percent']
+                        .rolling(window=7, center=True, min_periods=1)
+                        .mean()
+                    )
+            
             # Clip extreme values (grades >25% are unrealistic for highways)
             data_df['road_grade_percent'] = data_df['road_grade_percent'].clip(-25, 25)
+            # Forward fill NaNs for continuity using newer pandas API
+            data_df['road_grade_percent'] = data_df['road_grade_percent'].ffill().bfill()
         
         output_dir = get_output_dir(top_dir, 'data')
         data_df.to_csv(f'{output_dir}/{name}_additional_cols.csv', index=False)
@@ -422,45 +463,74 @@ def analyze_instantaneous_energy(top_dir, names):
         data_df = read_csv_cached(f'{output_dir}/{name}_additional_cols.csv', low_memory=False)
         data_df = normalize_data(data_df)
         
-        # Separate driving and regen data
-        data_driving_df = data_df[(data_df['energytype'] == 'driving_energy') & 
-                                  (data_df['distance'].notna()) & 
-                                  (data_df['distance'] != 0)].copy()
-        data_regen_df = data_df[(data_df['energytype'] == 'energy_regen') & 
-                               (data_df['distance'].notna()) & 
-                               (data_df['distance'] != 0)].copy()
-        
-        data_driving_df['timestamp'] = pd.to_datetime(data_driving_df['timestamp'])
-        data_regen_df['timestamp'] = pd.to_datetime(data_regen_df['timestamp'])
+        # Separate driving and regen data (messy_middle uses truck_activity instead of energytype)
+        if DATASET_TYPE == 'messy_middle':
+            driving_mask = data_df['truck_activity'] == 'driving'
+            regen_energy_col = get_column_name(data_df, ['energy_regen_kwh', 'accumumlatedkwh'])
+            driving_energy_col = get_column_name(data_df, ['driving_energy_kwh', 'accumumlatedkwh'])
+        else:
+            driving_mask = data_df['energytype'] == 'driving_energy'
+            regen_energy_col = 'accumumlatedkwh'
+            driving_energy_col = 'accumumlatedkwh'
 
-        # Calculate differences
-        data_driving_df['accumulatedkwh_diffs'] = data_driving_df['accumumlatedkwh'] - data_driving_df['accumumlatedkwh'].shift(1)
-        data_driving_df['accumulated_distance_diffs'] = data_driving_df['accumulated_distance'] - data_driving_df['accumulated_distance'].shift(1)
+        driving_mask &= data_df['accumulated_distance'].notna()
+        data_driving_df = data_df[driving_mask].copy()
+
+        if data_driving_df.empty:
+            print(f"  ⚠ No driving samples found for {name}; skipping plot")
+            continue
+
+        data_driving_df['timestamp'] = pd.to_datetime(data_driving_df['timestamp'])
+
+        # Driving deltas
+        data_driving_df['accumulatedkwh_diffs'] = data_driving_df[driving_energy_col].diff()
+        data_driving_df['accumulated_distance_diffs'] = data_driving_df['accumulated_distance'].diff()
         data_driving_df['accumulated_distance_diffs_unc'] = DISTANCE_UNCERTAINTY
         data_driving_df['timestamp_diffs_seconds'] = (data_driving_df['timestamp'] - data_driving_df['timestamp'].shift(1)).dt.total_seconds()
-        
-        data_regen_df['accumulatedkwh_diffs'] = -1*(data_regen_df['accumumlatedkwh'] - data_regen_df['accumumlatedkwh'].shift(1))
-        data_regen_df['accumulated_distance_diffs'] = data_regen_df['accumulated_distance'] - data_regen_df['accumulated_distance'].shift(1)
-        data_regen_df['timestamp_diffs_seconds'] = (data_regen_df['timestamp'] - data_regen_df['timestamp'].shift(1)).dt.total_seconds()
-        
-        data_driving_with_regen_df = pd.concat([data_driving_df, data_regen_df])
-        
-        # Calculate energy per distance
+
+        # Regen deltas (aligned to the same driving rows to avoid double-counting distance)
+        regen_diff_raw = data_df.loc[driving_mask, regen_energy_col].diff()
+        regen_diff = regen_diff_raw.copy()
+        regen_diff.loc[regen_diff_raw < 0] = np.nan  # drop resets
+
+        # Drop bad steps and tiny distance steps
+        data_driving_df.loc[data_driving_df['accumulatedkwh_diffs'] <= 0, 'accumulatedkwh_diffs'] = np.nan
+        data_driving_df = data_driving_df[data_driving_df['accumulated_distance_diffs'] > DISTANCE_UNCERTAINTY]
+
+        # Energy per distance (driving only)
         data_driving_df['driving_energy_per_distance'] = data_driving_df['accumulatedkwh_diffs'] / data_driving_df['accumulated_distance_diffs']
-        data_driving_with_regen_df['driving_energy_per_distance'] = data_driving_with_regen_df['accumulatedkwh_diffs'] / data_driving_with_regen_df['accumulated_distance_diffs']
-        data_regen_df['driving_energy_per_distance'] = data_regen_df['accumulatedkwh_diffs'] / data_regen_df['accumulated_distance_diffs']
-        
-        e_per_d_driving_total = data_driving_df['accumulatedkwh_diffs'].sum() / data_driving_df['accumulated_distance_diffs'].sum()
-        e_per_d_driving_and_regen_total = data_driving_with_regen_df['accumulatedkwh_diffs'].sum() / data_driving_with_regen_df['accumulated_distance_diffs'].sum()
+
+        # Regen energy per distance (negative values to visualize recovery)
+        data_driving_df['regen_energy_per_distance'] = -regen_diff / data_driving_df['accumulated_distance_diffs']
+
+        # Net driving+regen per distance using the SAME distance once
+        data_driving_df['net_energy_per_distance'] = (
+            data_driving_df['accumulatedkwh_diffs'] - regen_diff
+        ) / data_driving_df['accumulated_distance_diffs']
+
+        # Build combined for binned stats
+        data_driving_with_regen_df = data_driving_df.copy()
+
+        driving_distance_sum = data_driving_df['accumulated_distance_diffs'].sum()
+        e_per_d_driving_total = np.nan if driving_distance_sum == 0 else data_driving_df['accumulatedkwh_diffs'].sum() / driving_distance_sum
+
+        net_energy_sum = (data_driving_df['accumulatedkwh_diffs'] - regen_diff).sum()
+        e_per_d_driving_and_regen_total = np.nan if driving_distance_sum == 0 else net_energy_sum / driving_distance_sum
         
         # Bin by speed
         bins = np.linspace(0, 70, 8)
         data_driving_df['binned'] = pd.cut(data_driving_df['speed'], bins)
         data_driving_with_regen_df['binned'] = pd.cut(data_driving_with_regen_df['speed'], bins)
         
-        binned_e_per_d_driving = data_driving_df.groupby('binned', observed=False)['accumulatedkwh_diffs'].sum() / data_driving_df.groupby('binned', observed=False)['accumulated_distance_diffs'].sum()
+        binned_dist = data_driving_df.groupby('binned', observed=False)['accumulated_distance_diffs'].sum()
+        binned_drive_energy = data_driving_df.groupby('binned', observed=False)['accumulatedkwh_diffs'].sum()
+        binned_regen_energy = regen_diff.groupby(data_driving_df['binned']).sum()
+
+        binned_e_per_d_driving = binned_drive_energy / binned_dist
         binned_e_per_d_driving_dict[name] = binned_e_per_d_driving
-        binned_e_per_d_driving_and_regen = data_driving_with_regen_df.groupby('binned', observed=False)['accumulatedkwh_diffs'].sum() / data_driving_with_regen_df.groupby('binned', observed=False)['accumulated_distance_diffs'].sum()
+
+        binned_net_energy = binned_drive_energy - binned_regen_energy
+        binned_e_per_d_driving_and_regen = binned_net_energy / binned_dist
         binned_e_per_d_driving_and_regen_dict[name] = binned_e_per_d_driving_and_regen
         
         # Plot per-truck results
@@ -474,7 +544,7 @@ def analyze_instantaneous_energy(top_dir, names):
         plt.hlines(0, linestyle='--', linewidth=1, color='black', xmin=0, xmax=70)
         
         ax.plot(data_driving_df['speed'], data_driving_df['driving_energy_per_distance'], 'o', color='blue', markersize=1, label='Driving Energy')
-        ax.plot(data_regen_df['speed'], data_regen_df['driving_energy_per_distance'], 'o', color='green', markersize=1, label='Regen Energy')
+        ax.plot(data_driving_df['speed'], data_driving_df['regen_energy_per_distance'], 'o', color='green', markersize=1, label='Regen Energy')
         
         draw_binned_step(binned_e_per_d_driving, linecolor='red', linelabel='Overall per speed band (driving only)')
         draw_binned_step(binned_e_per_d_driving_and_regen, linecolor='green', linelabel='Overall per speed band (driving and regen)')
@@ -1139,10 +1209,20 @@ def analyze_drive_cycles(top_dir, names):
                 grade_valid = data_df_event_with_elevation['road_grade_percent'].notna().sum() > 0
                 
                 if elevation_valid and grade_valid:
-                    fig, axs = plt.subplots(3, 1, figsize=(14, 10), gridspec_kw={'height_ratios': [1, 1, 1]})
+                    fig, axs = plt.subplots(5, 1, figsize=(14, 16), gridspec_kw={'height_ratios': [1, 1, 1, 1, 1]})
+                    
+                    # For grade panel: exclude edges to eliminate boundary artifacts
+                    # Use max of 10 points or 5% of cycle length (whichever larger), capped at 25% of cycle
+                    edge_buffer = max(10, int(len(data_df_event) * 0.05))
+                    edge_buffer = min(edge_buffer, int(len(data_df_event) * 0.25))
+                    valid_idx = list(range(edge_buffer, len(data_df_event) - edge_buffer)) if len(data_df_event) > edge_buffer * 2 else list(range(len(data_df_event)))
+
+                    # Apply the same edge trimming to all panels so time axes stay aligned
+                    data_df_event_core = data_df_event.iloc[valid_idx].copy()
+                    data_df_event_with_elevation_core = data_df_event_with_elevation.iloc[valid_idx].copy()
                     
                     # Panel 1: Speed vs time
-                    data_speed_plot = data_df_event.dropna(subset=['speed'])
+                    data_speed_plot = data_df_event_core.dropna(subset=['speed'])
                     axs[0].plot(data_speed_plot['time_elapsed'], data_speed_plot['speed'], 
                                linewidth=2, color='steelblue')
                     axs[0].set_ylabel('Speed (mph)', fontsize=16)
@@ -1151,27 +1231,59 @@ def analyze_drive_cycles(top_dir, names):
                     axs[0].xaxis.set_tick_params(labelbottom=False)
                     
                     # Panel 2: Elevation vs time
-                    elev_mask = data_df_event_with_elevation[elevation_col].notna()
+                    elev_mask = data_df_event_with_elevation_core[elevation_col].notna()
                     if elev_mask.sum() > 0:
-                        time_for_elev = data_df_event.loc[elev_mask, 'time_elapsed']
-                        elev_values = data_df_event_with_elevation.loc[elev_mask, elevation_col]
+                        time_for_elev = data_df_event_core.loc[elev_mask, 'time_elapsed']
+                        elev_values = data_df_event_with_elevation_core.loc[elev_mask, elevation_col]
                         axs[1].plot(time_for_elev, elev_values, linewidth=2, color='darkorange')
                     axs[1].set_ylabel('Elevation (meters)', fontsize=16)
                     axs[1].grid(True, alpha=0.3)
                     axs[1].tick_params(axis='both', which='major', labelsize=12)
                     axs[1].xaxis.set_tick_params(labelbottom=False)
                     
-                    # Panel 3: Road grade vs time
-                    grade_mask = data_df_event_with_elevation['road_grade_percent'].notna()
+                    # Panel 3: Road grade vs time (edges removed for consistency across panels)
+                    grade_mask = data_df_event_with_elevation_core['road_grade_percent'].notna()
                     if grade_mask.sum() > 0:
-                        time_for_grade = data_df_event.loc[grade_mask, 'time_elapsed']
-                        grade_values = data_df_event_with_elevation.loc[grade_mask, 'road_grade_percent']
+                        time_for_grade = data_df_event_core.loc[grade_mask, 'time_elapsed'].values
+                        grade_values = data_df_event_with_elevation_core.loc[grade_mask, 'road_grade_percent'].values
                         axs[2].plot(time_for_grade, grade_values, linewidth=2, color='darkgreen')
+
                     axs[2].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
                     axs[2].set_ylabel('Road Grade (%)', fontsize=16)
-                    axs[2].set_xlabel('Drive time (minutes)', fontsize=16)
                     axs[2].grid(True, alpha=0.3)
                     axs[2].tick_params(axis='both', which='major', labelsize=12)
+
+                    # Panel 4: Payload (weight_kg) vs time
+                    payload_mask = data_df_event_with_elevation_core['weight_kg'].notna()
+                    if payload_mask.sum() > 0:
+                        time_for_payload = data_df_event_core.loc[payload_mask, 'time_elapsed']
+                        payload_values = data_df_event_with_elevation_core.loc[payload_mask, 'weight_kg']
+                        axs[3].plot(time_for_payload, payload_values, linewidth=2, color='firebrick')
+                    axs[3].set_ylabel('Payload (kg)', fontsize=16)
+                    axs[3].grid(True, alpha=0.3)
+                    axs[3].tick_params(axis='both', which='major', labelsize=12)
+                    axs[3].xaxis.set_tick_params(labelbottom=False)
+
+                    # Panel 5: Instantaneous energy economy vs time
+                    energy_df = data_df_event_core.copy()
+                    energy_df['accumulatedkwh_diffs'] = energy_df['accumumlatedkwh'].diff()
+                    energy_df['distance_diffs'] = energy_df['accumulated_distance'].diff()
+                    energy_df['inst_energy_per_mile'] = energy_df['accumulatedkwh_diffs'] / energy_df['distance_diffs']
+                    energy_mask = (
+                        energy_df['distance_diffs'].abs() > DISTANCE_UNCERTAINTY
+                    ) & energy_df['inst_energy_per_mile'].notna()
+                    if energy_mask.sum() > 0:
+                        axs[4].plot(
+                            energy_df.loc[energy_mask, 'time_elapsed'],
+                            energy_df.loc[energy_mask, 'inst_energy_per_mile'],
+                            linewidth=2,
+                            color='purple'
+                        )
+                    axs[4].set_ylabel('Inst. energy (kWh/mile)', fontsize=16)
+                    axs[4].set_ylim(-5, 5)
+                    axs[4].set_xlabel('Drive time (minutes)', fontsize=16)
+                    axs[4].grid(True, alpha=0.3)
+                    axs[4].tick_params(axis='both', which='major', labelsize=12)
                     
                     # Add title
                     fig.suptitle(f"{name.replace('_', ' ').capitalize()}: Drive Cycle {driving_event} - Speed, Elevation, and Grade", 
@@ -1497,14 +1609,14 @@ def main():
     # Stage 1: Data Preprocessing
     preprocess_data(top_dir, files, names)
     
-    # Stage 1.5: Elevation and Road Grade Analysis
-    analyze_elevation_grade(top_dir, names)
+    # # Stage 1.5: Elevation and Road Grade Analysis
+    # analyze_elevation_grade(top_dir, names)
     
     # # Stage 2: Charging Analysis
     # analyze_charging_power(top_dir, names)
     
-    # # Stage 3: Energy Analysis
-    # analyze_instantaneous_energy(top_dir, names)
+    # Stage 3: Energy Analysis
+    analyze_instantaneous_energy(top_dir, names)
     
     # # Stage 4: Prepare Driving/Charging Events
     # prepare_driving_charging_data(top_dir, names)
