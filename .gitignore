@@ -3,3 +3,8 @@ plots/*
 tables/*
 .DS_Store
 __pycache__
+*.md
+!README.md
+data_messy_middle/*
+tables_messy
+plots_messy

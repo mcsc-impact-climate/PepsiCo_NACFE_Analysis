@@ -38,6 +38,11 @@ DAYS_PER_MONTH = 30.437
 METERS_PER_MILE = 1609.34
 RMSE_cutoff = 10
 
+# Drive cycle filtering thresholds
+MIN_DRIVING_EVENT_POINTS = 5       # Minimum data points per driving event
+MIN_DRIVING_DOD = 15               # Minimum depth of discharge (%) for a driving event
+MIN_DRIVING_DISTANCE = 2            # Minimum distance traveled (miles) for a driving event
+
 # Data caching to avoid re-reading CSV files
 _csv_cache = {}
 
@@ -89,11 +94,12 @@ def get_file_list(top_dir):
         names = [file.split('/')[-1].split('_spd_dist')[0] for file in files]
     else:  # messy_middle
         files = [
-            f'{top_dir}/data_messy_middle/joyride.csv',
-            f'{top_dir}/data_messy_middle/4gen.csv',
+            # f'{top_dir}/data_messy_middle/joyride.csv',
+            # f'{top_dir}/data_messy_middle/4gen.csv',
             f'{top_dir}/data_messy_middle/nevoya.csv'
         ]
-        names = ['joyride', '4gen', 'nevoya']
+        #names = ['joyride', '4gen', 'nevoya']
+        names = ['nevoya']
     
     return files, names
 
@@ -282,7 +288,7 @@ def analyze_charging_power(top_dir, names):
     plt.boxplot(data)
     for i, mean in enumerate(means, start=1):
         plt.scatter(i, mean, color='red', marker='o', label='Mean' if i == 1 else "")
-    plt.xticks([1, 2, 3], [name.replace('_', ' ').capitalize() for name in names])
+    plt.xticks(range(1, len(names) + 1), [name.replace('_', ' ').capitalize() for name in names])
     plt.ylabel('Charging power (kW)', fontsize=18)
     ax.tick_params(axis='both', which='major', labelsize=16)
     plt.legend(fontsize=16)
@@ -852,7 +858,14 @@ def analyze_drive_cycles(top_dir, names):
             cDrivingEvent = (data_df['driving_event'] == driving_event)
             data_df_event = data_df[cDrivingEvent].dropna(subset=['socpercent', 'accumulated_distance'])
             
-            if len(data_df_event) < 10 or (data_df_event['socpercent'].max() - data_df_event['socpercent'].min()) < 50:
+            # Calculate filtering criteria
+            dod = data_df_event['socpercent'].max() - data_df_event['socpercent'].min()
+            distance = data_df_event['accumulated_distance'].max() - data_df_event['accumulated_distance'].min()
+            
+            # Apply filters: minimum points, minimum DoD, and minimum distance traveled
+            if (len(data_df_event) < MIN_DRIVING_EVENT_POINTS or 
+                dod < MIN_DRIVING_DOD or 
+                distance < MIN_DRIVING_DISTANCE):
                 continue
             
             # Convert timestamp to datetime and calculate time_elapsed
@@ -1133,6 +1146,21 @@ def analyze_vmt(top_dir, names):
         data_df = read_csv_cached(f'{output_dir}/{name}_with_driving_charging.csv', low_memory=False)
         data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
         
+        # Load selected charging and driving events
+        charging_selected = set()
+        try:
+            charging_df = pd.read_csv(f'{table_dir}/{name}_charging_time_data.csv')
+            charging_selected = set(charging_df['charging_event'].astype(int).values)
+        except FileNotFoundError:
+            pass
+        
+        driving_selected = set()
+        try:
+            driving_df = pd.read_csv(f'{table_dir}/{name}_drivecycle_data.csv')
+            driving_selected = set(driving_df['Driving event'].astype(int).values)
+        except FileNotFoundError:
+            pass
+        
         min_datetime = data_df['timestamp'].min()
         data_df['timestamp_hours'] = data_df['timestamp'].apply(
             lambda x: float((x - min_datetime).total_seconds() / SECONDS_PER_HOUR) if pd.notna(x) else np.nan
@@ -1142,6 +1170,10 @@ def analyze_vmt(top_dir, names):
         data_df = data_df[~np.isinf(data_df['timestamp_hours'])]
         data_df_reduced = data_df.iloc[::100]
         
+        # Create event selection masks
+        data_df['charging_selected'] = data_df['charging_event'].isin(charging_selected) & (data_df['activity'] == 'charging')
+        data_df['driving_selected'] = data_df['driving_event'].isin(driving_selected) & (data_df['activity'] == 'driving')
+        
         # Plot speed and SOC vs time
         fig, axs = plt.subplots(2, 1, figsize=(18, 7), gridspec_kw={'height_ratios': [1, 1]})
         axs[0].plot(data_df_reduced.dropna(subset=['speed'])['timestamp_hours'], 
@@ -1149,26 +1181,52 @@ def analyze_vmt(top_dir, names):
         axs[1].plot(data_df.dropna(subset=['socpercent', 'timestamp_hours'])['timestamp_hours'], 
                    data_df.dropna(subset=['socpercent', 'timestamp_hours'])['socpercent'])
         
-        cCharging = (data_df['activity'] == 'charging')
-        data_df['charging_timestamp'] = data_df['timestamp_hours'].where(cCharging, np.nan)
+        # Highlight unselected charging events (faded)
+        cChargingUnselected = (data_df['activity'] == 'charging') & ~data_df['charging_selected']
+        data_df['charging_unselected_timestamp'] = data_df['timestamp_hours'].where(cChargingUnselected, np.nan)
         
         ymin, ymax = axs[0].get_ylim()
-        axs[0].fill_between(data_df['charging_timestamp'], ymin, ymax, color='green', alpha=0.2, edgecolor='none')
+        axs[0].fill_between(data_df['charging_unselected_timestamp'], ymin, ymax, color='green', alpha=0.1, edgecolor='none')
         axs[0].set_ylim(ymin, ymax)
         
         ymin, ymax = axs[1].get_ylim()
-        axs[1].fill_between(data_df['charging_timestamp'], ymin, ymax, color='green', alpha=0.2, edgecolor='none', label='Charging')
+        axs[1].fill_between(data_df['charging_unselected_timestamp'], ymin, ymax, color='green', alpha=0.1, edgecolor='none')
         axs[1].set_ylim(ymin, ymax)
         
-        cDriving = (data_df['activity'] == 'driving')
-        data_df['driving_timestamp'] = data_df['timestamp_hours'].where(cDriving, np.nan)
+        # Highlight selected charging events (bright)
+        cChargingSelected = data_df['charging_selected']
+        data_df['charging_selected_timestamp'] = data_df['timestamp_hours'].where(cChargingSelected, np.nan)
         
         ymin, ymax = axs[0].get_ylim()
-        axs[0].fill_between(data_df['driving_timestamp'], ymin, ymax, color='purple', alpha=0.2, edgecolor='none')
+        axs[0].fill_between(data_df['charging_selected_timestamp'], ymin, ymax, color='darkgreen', alpha=0.4, edgecolor='none')
         axs[0].set_ylim(ymin, ymax)
         
         ymin, ymax = axs[1].get_ylim()
-        axs[1].fill_between(data_df['driving_timestamp'], ymin, ymax, color='purple', alpha=0.2, edgecolor='none', label='Driving')
+        axs[1].fill_between(data_df['charging_selected_timestamp'], ymin, ymax, color='darkgreen', alpha=0.4, edgecolor='none', label='Charging (selected)')
+        axs[1].set_ylim(ymin, ymax)
+        
+        # Highlight unselected driving events (faded)
+        cDrivingUnselected = (data_df['activity'] == 'driving') & ~data_df['driving_selected']
+        data_df['driving_unselected_timestamp'] = data_df['timestamp_hours'].where(cDrivingUnselected, np.nan)
+        
+        ymin, ymax = axs[0].get_ylim()
+        axs[0].fill_between(data_df['driving_unselected_timestamp'], ymin, ymax, color='purple', alpha=0.1, edgecolor='none')
+        axs[0].set_ylim(ymin, ymax)
+        
+        ymin, ymax = axs[1].get_ylim()
+        axs[1].fill_between(data_df['driving_unselected_timestamp'], ymin, ymax, color='purple', alpha=0.1, edgecolor='none')
+        axs[1].set_ylim(ymin, ymax)
+        
+        # Highlight selected driving events (bright)
+        cDrivingSelected = data_df['driving_selected']
+        data_df['driving_selected_timestamp'] = data_df['timestamp_hours'].where(cDrivingSelected, np.nan)
+        
+        ymin, ymax = axs[0].get_ylim()
+        axs[0].fill_between(data_df['driving_selected_timestamp'], ymin, ymax, color='indigo', alpha=0.4, edgecolor='none')
+        axs[0].set_ylim(ymin, ymax)
+        
+        ymin, ymax = axs[1].get_ylim()
+        axs[1].fill_between(data_df['driving_selected_timestamp'], ymin, ymax, color='indigo', alpha=0.4, edgecolor='none', label='Driving (selected)')
         axs[1].set_ylim(ymin, ymax)
         
         axs[0].set_ylabel('Speed (mph)', fontsize=22)
@@ -1184,6 +1242,18 @@ def analyze_vmt(top_dir, names):
         
         axs[1].tick_params(axis='both', which='major', labelsize=20)
         axs[1].xaxis.set_major_locator(MaxNLocator(10))
+        
+        # Add info box showing event counts
+        n_charging_total = data_df[data_df['activity'] == 'charging']['charging_event'].nunique()
+        n_charging_selected = len(charging_selected)
+        n_driving_total = data_df[data_df['activity'] == 'driving']['driving_event'].nunique()
+        n_driving_selected = len(driving_selected)
+        
+        info_text = f'Charging Events: {n_charging_selected}/{n_charging_total} selected\n'
+        info_text += f'Driving Events: {n_driving_selected}/{n_driving_total} selected'
+        
+        axs[0].text(0.02, 0.98, info_text, transform=axs[0].transAxes, fontsize=14,
+                   verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
         
         axs[1].legend(fontsize=22, bbox_to_anchor=(1.0, 0.5))
         plt.tight_layout()
