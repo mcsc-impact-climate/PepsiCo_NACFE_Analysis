@@ -94,15 +94,13 @@ def get_file_list(top_dir):
         names = [file.split('/')[-1].split('_spd_dist')[0] for file in files]
     else:  # messy_middle
         files = [
-            # f'{top_dir}/data_messy_middle/joyride.csv',
-            # f'{top_dir}/data_messy_middle/4gen.csv',
-            # f'{top_dir}/data_messy_middle/nevoya.csv',
+            f'{top_dir}/data_messy_middle/joyride.csv',
+            f'{top_dir}/data_messy_middle/4gen.csv',
+            f'{top_dir}/data_messy_middle/nevoya.csv',
             f'{top_dir}/data_messy_middle/saia1_with_elevation.csv',
             f'{top_dir}/data_messy_middle/saia2_with_elevation.csv'
         ]
-        #names = ['joyride', '4gen', 'nevoya', 'saia1', 'saia2']
-        names = ['saia1', 'saia2']
-        # names = ['nevoya']
+        names = ['joyride', '4gen', 'nevoya', 'saia1', 'saia2']
     
     return files, names
 
@@ -223,9 +221,114 @@ def preprocess_data(top_dir, files, names):
         # Calculate accumulated distance
         data_df['accumulated_distance'] = data_df['distance'].fillna(0).cumsum()
         
+        # Calculate road grade from elevation data
+        elevation_col = get_column_name(data_df, ['elevation_final_m', 'elevation_meters'])
+        if elevation_col:
+            # Smooth elevation data using rolling window to reduce noise
+            # Window of 5 points typically corresponds to ~5 seconds of data
+            data_df['elevation_smooth'] = data_df[elevation_col].rolling(window=5, center=True).mean()
+            # Calculate elevation change and distance change
+            data_df['elevation_change'] = data_df['elevation_smooth'].diff()
+            data_df['distance_change_miles'] = data_df['distance'].fillna(0)
+            # Convert distance from miles to meters for grade calculation
+            data_df['distance_change_meters'] = data_df['distance_change_miles'] * METERS_PER_MILE
+            # Calculate road grade: grade (%) = (elevation_change / distance) * 100
+            # Avoid division by zero
+            data_df['road_grade_percent'] = np.where(
+                data_df['distance_change_meters'] != 0,
+                (data_df['elevation_change'] / data_df['distance_change_meters']) * 100,
+                0
+            )
+            # Clip extreme values (grades >25% are unrealistic for highways)
+            data_df['road_grade_percent'] = data_df['road_grade_percent'].clip(-25, 25)
+        
         output_dir = get_output_dir(top_dir, 'data')
         data_df.to_csv(f'{output_dir}/{name}_additional_cols.csv', index=False)
         print(f"  ✓ Saved {name}_additional_cols.csv")
+
+def analyze_elevation_grade(top_dir, names):
+    """Analyze and visualize elevation, road grade, and speed data."""
+    print("\n" + "="*70)
+    print("ANALYZING ELEVATION AND ROAD GRADE")
+    print("="*70)
+    
+    if NO_PLOT_MODE:
+        print("(Skipping analysis - NO_PLOT_MODE is enabled)")
+        return
+    
+    output_dir = get_output_dir(top_dir, 'data')
+    plot_dir = get_output_dir(top_dir, 'plots')
+    
+    for name in names:
+        print(f"Processing {name}...")
+        data_df = read_csv_cached(f'{output_dir}/{name}_additional_cols.csv', low_memory=False)
+        data_df = normalize_data(data_df)
+        data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
+        
+        # Check if elevation data exists
+        elevation_col = get_column_name(data_df, ['elevation_final_m', 'elevation_meters'])
+        if not elevation_col or 'road_grade_percent' not in data_df.columns:
+            print(f"  ⚠ No elevation data available for {name}, skipping analysis")
+            continue
+        
+        # Reduce data for plotting (every 100th point to avoid overcrowding)
+        min_datetime = data_df['timestamp'].min()
+        data_df['time_hours'] = data_df['timestamp'].apply(
+            lambda x: float((x - min_datetime).total_seconds() / SECONDS_PER_HOUR) if pd.notna(x) else np.nan
+        )
+        data_df_plot = data_df.iloc[::100]
+        
+        # Create three-panel figure: speed vs time, elevation vs time, grade vs time
+        fig, axs = plt.subplots(3, 1, figsize=(16, 10), gridspec_kw={'height_ratios': [1, 1, 1]})
+        
+        # Panel 1: Speed vs time
+        data_speed = data_df_plot.dropna(subset=['speed', 'time_hours'])
+        axs[0].plot(data_speed['time_hours'], data_speed['speed'], linewidth=1.5, color='steelblue')
+        axs[0].set_ylabel('Speed (mph)', fontsize=16)
+        axs[0].set_xlim(data_df['time_hours'].min(), data_df['time_hours'].max())
+        axs[0].grid(True, alpha=0.3)
+        axs[0].tick_params(axis='both', which='major', labelsize=12)
+        axs[0].xaxis.set_tick_params(labelbottom=False)
+        
+        # Panel 2: Elevation vs time
+        data_elev = data_df_plot.dropna(subset=[elevation_col, 'time_hours'])
+        axs[1].plot(data_elev['time_hours'], data_elev[elevation_col], linewidth=1.5, color='darkorange')
+        axs[1].set_ylabel('Elevation (meters)', fontsize=16)
+        axs[1].set_xlim(data_df['time_hours'].min(), data_df['time_hours'].max())
+        axs[1].grid(True, alpha=0.3)
+        axs[1].tick_params(axis='both', which='major', labelsize=12)
+        axs[1].xaxis.set_tick_params(labelbottom=False)
+        
+        # Panel 3: Road grade vs time
+        data_grade = data_df_plot.dropna(subset=['road_grade_percent', 'time_hours'])
+        axs[2].plot(data_grade['time_hours'], data_grade['road_grade_percent'], linewidth=1.5, color='darkgreen')
+        axs[2].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+        axs[2].set_ylabel('Road Grade (%)', fontsize=16)
+        axs[2].set_xlabel('Time Elapsed (hours)', fontsize=16)
+        axs[2].set_xlim(data_df['time_hours'].min(), data_df['time_hours'].max())
+        axs[2].grid(True, alpha=0.3)
+        axs[2].tick_params(axis='both', which='major', labelsize=12)
+        
+        # Add title
+        fig.suptitle(f"{name.replace('_', ' ').capitalize()}: Speed, Elevation, and Road Grade Over Time", 
+                    fontsize=18, fontweight='bold')
+        
+        plt.tight_layout()
+        plt.savefig(f'{plot_dir}/{name}_elevation_grade_analysis.png', dpi=300)
+        if not FAST_MODE:
+            plt.savefig(f'{plot_dir}/{name}_elevation_grade_analysis.pdf')
+        plt.close()
+        
+        # Print statistics
+        grade_mean = data_df['road_grade_percent'].mean()
+        grade_std = data_df['road_grade_percent'].std()
+        grade_min = data_df['road_grade_percent'].min()
+        grade_max = data_df['road_grade_percent'].max()
+        
+        print(f"  ✓ Saved elevation and grade analysis for {name}")
+        print(f"    Road Grade Statistics:")
+        print(f"      Mean: {grade_mean:.2f}% ± {grade_std:.2f}%")
+        print(f"      Range: {grade_min:.2f}% to {grade_max:.2f}%")
 
 def analyze_charging_power(top_dir, names):
     """Analyze charging power statistics and create visualizations."""
@@ -1333,32 +1436,35 @@ def main():
     
     # ======== UNCOMMENT/COMMENT SECTIONS TO RUN ========
     
-    # Stage 1: Data Preprocessing
-    preprocess_data(top_dir, files, names)
+    # # Stage 1: Data Preprocessing
+    # preprocess_data(top_dir, files, names)
     
-    # Stage 2: Charging Analysis
-    analyze_charging_power(top_dir, names)
+    # Stage 1.5: Elevation and Road Grade Analysis
+    analyze_elevation_grade(top_dir, names)
     
-    # Stage 3: Energy Analysis
-    analyze_instantaneous_energy(top_dir, names)
+    # # Stage 2: Charging Analysis
+    # analyze_charging_power(top_dir, names)
     
-    # Stage 4: Prepare Driving/Charging Events
-    prepare_driving_charging_data(top_dir, names)
+    # # Stage 3: Energy Analysis
+    # analyze_instantaneous_energy(top_dir, names)
     
-    # Stage 5: Battery Capacity Analysis
-    analyze_battery_capacity(top_dir, names)
+    # # Stage 4: Prepare Driving/Charging Events
+    # prepare_driving_charging_data(top_dir, names)
     
-    # Stage 6: Charging Time & DoD
-    analyze_charging_time_dod(top_dir, names)
+    # # Stage 5: Battery Capacity Analysis
+    # analyze_battery_capacity(top_dir, names)
     
-    # Stage 7: Drive Cycles
-    analyze_drive_cycles(top_dir, names)
+    # # Stage 6: Charging Time & DoD
+    # analyze_charging_time_dod(top_dir, names)
     
-    # Stage 8: VMT Analysis
-    analyze_vmt(top_dir, names)
+    # # Stage 7: Drive Cycles
+    # analyze_drive_cycles(top_dir, names)
     
-    # Stage 9: Energy Delivered
-    analyze_energy_delivered(top_dir, names)
+    # # Stage 8: VMT Analysis
+    # analyze_vmt(top_dir, names)
+    
+    # # Stage 9: Energy Delivered
+    # analyze_energy_delivered(top_dir, names)
     
     # ====================================================
     
