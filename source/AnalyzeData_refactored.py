@@ -1266,12 +1266,29 @@ def analyze_drive_cycles(top_dir, names):
 
                     # Panel 5: Instantaneous energy economy vs time
                     energy_df = data_df_event_core.copy()
-                    energy_df['accumulatedkwh_diffs'] = energy_df['accumumlatedkwh'].diff()
+                    driving_energy_col = get_column_name(energy_df, ['driving_energy_kwh', 'accumumlatedkwh'])
+                    regen_energy_col = get_column_name(energy_df, ['energy_regen_kwh', 'accumumlatedkwh'])
+                    if regen_energy_col is None:
+                        regen_energy_col = driving_energy_col
+
+                    # Driving deltas (drop resets/negatives)
+                    energy_df['driving_energy_diffs'] = energy_df[driving_energy_col].diff()
+                    energy_df.loc[energy_df['driving_energy_diffs'] <= 0, 'driving_energy_diffs'] = np.nan
+
+                    # Regen deltas aligned to the same rows; drop resets so only actual recovery remains
+                    regen_diff_raw = energy_df[regen_energy_col].diff()
+                    energy_df['regen_energy_diffs'] = regen_diff_raw.where(regen_diff_raw >= 0, np.nan)
+
+                    # Distance deltas and instantaneous net energy (driving - regen) per mile
                     energy_df['distance_diffs'] = energy_df['accumulated_distance'].diff()
-                    energy_df['inst_energy_per_mile'] = energy_df['accumulatedkwh_diffs'] / energy_df['distance_diffs']
+                    energy_df['inst_energy_per_mile'] = (
+                        energy_df['driving_energy_diffs'] - energy_df['regen_energy_diffs']
+                    ) / energy_df['distance_diffs']
+
                     energy_mask = (
                         energy_df['distance_diffs'].abs() > DISTANCE_UNCERTAINTY
                     ) & energy_df['inst_energy_per_mile'].notna()
+
                     if energy_mask.sum() > 0:
                         axs[4].plot(
                             energy_df.loc[energy_mask, 'time_elapsed'],
@@ -1280,7 +1297,6 @@ def analyze_drive_cycles(top_dir, names):
                             color='purple'
                         )
                     axs[4].set_ylabel('Inst. energy (kWh/mile)', fontsize=16)
-                    axs[4].set_ylim(-5, 5)
                     axs[4].set_xlabel('Drive time (minutes)', fontsize=16)
                     axs[4].grid(True, alpha=0.3)
                     axs[4].tick_params(axis='both', which='major', labelsize=12)
@@ -1609,32 +1625,32 @@ def main():
     # Stage 1: Data Preprocessing
     preprocess_data(top_dir, files, names)
     
-    # # Stage 1.5: Elevation and Road Grade Analysis
-    # analyze_elevation_grade(top_dir, names)
+    # Stage 1.5: Elevation and Road Grade Analysis
+    analyze_elevation_grade(top_dir, names)
     
-    # # Stage 2: Charging Analysis
-    # analyze_charging_power(top_dir, names)
+    # Stage 2: Charging Analysis
+    analyze_charging_power(top_dir, names)
     
     # Stage 3: Energy Analysis
     analyze_instantaneous_energy(top_dir, names)
     
-    # # Stage 4: Prepare Driving/Charging Events
-    # prepare_driving_charging_data(top_dir, names)
+    # Stage 4: Prepare Driving/Charging Events
+    prepare_driving_charging_data(top_dir, names)
     
-    # # Stage 5: Battery Capacity Analysis
-    # analyze_battery_capacity(top_dir, names)
+    # Stage 5: Battery Capacity Analysis
+    analyze_battery_capacity(top_dir, names)
     
-    # # Stage 6: Charging Time & DoD
-    # analyze_charging_time_dod(top_dir, names)
+    # Stage 6: Charging Time & DoD
+    analyze_charging_time_dod(top_dir, names)
     
-    # # Stage 7: Drive Cycles
-    # analyze_drive_cycles(top_dir, names)
+    # Stage 7: Drive Cycles
+    analyze_drive_cycles(top_dir, names)
     
-    # # Stage 8: VMT Analysis
-    # analyze_vmt(top_dir, names)
+    # Stage 8: VMT Analysis
+    analyze_vmt(top_dir, names)
     
-    # # Stage 9: Energy Delivered
-    # analyze_energy_delivered(top_dir, names)
+    # Stage 9: Energy Delivered
+    analyze_energy_delivered(top_dir, names)
     
     # ====================================================
     
