@@ -31,7 +31,7 @@ DATASET_TYPE = 'messy_middle'  # 'pepsi' or 'messy_middle'
 SECONDS_PER_HOUR = 3600.
 MINUTES_PER_DAY = 60.*24.
 DAYS_PER_YEAR = 365.
-DISTANCE_UNCERTAINTY = 2.5*np.sqrt(2)/1600.
+DISTANCE_UNCERTAINTY = 0.02  # miles (~32 meters) - raised to suppress spikes from tiny distance steps
 KM_PER_MILE = 1.60934
 KM_TO_MILES = 0.621371
 DAYS_PER_MONTH = 30.437
@@ -248,12 +248,17 @@ def preprocess_data(top_dir, files, names):
             data_df['distance_change_meters'] = dist_step_miles * METERS_PER_MILE
             data_df['elevation_change'] = data_df['elevation_smooth'].diff()
             
+            # Calculate speed change rate to detect rapid acceleration/deceleration
+            data_df['speed_change'] = data_df['speed'].diff().abs()
+            
             # Thresholds to suppress spikes from tiny movements / near-zero speed
             min_distance_threshold = 0.01  # ~16 meters
-            min_speed_threshold = 2.0      # mph
+            min_speed_threshold = 5.0      # mph - raised to reduce GPS noise during deceleration/stops
+            max_speed_change = 5.0         # mph - lowered to catch more gradual accel/decel transitions
             speed_ok = data_df['speed'].fillna(0) > min_speed_threshold
             dist_ok = data_df['distance_change_meters'].abs() > min_distance_threshold
-            valid_grade = speed_ok & dist_ok & data_df['elevation_change'].notna()
+            speed_stable = data_df['speed_change'].fillna(0) < max_speed_change
+            valid_grade = speed_ok & dist_ok & speed_stable & data_df['elevation_change'].notna()
             
             # Initial grade calculation
             data_df['road_grade_percent'] = np.nan
@@ -262,19 +267,19 @@ def preprocess_data(top_dir, files, names):
                 data_df.loc[valid_grade, 'distance_change_meters']
             ) * 100.0
             
-            # Median filter to remove single-sample spikes
+            # Median filter to remove single-sample spikes (wider window for more aggressive filtering)
             data_df['road_grade_percent'] = (
                 data_df['road_grade_percent']
-                .rolling(window=5, center=True, min_periods=1)
+                .rolling(window=11, center=True, min_periods=1)
                 .median()
             )
             
-            # Smooth the grade values to reduce residual noise (Savitzky-Golay then clip)
+            # Smooth the grade values to reduce residual noise (wider Savitzky-Golay window)
             grade_valid = data_df['road_grade_percent'].notna()
-            if grade_valid.sum() > 9:
+            if grade_valid.sum() > 15:
                 grade_array = data_df.loc[grade_valid, 'road_grade_percent'].values
                 try:
-                    grade_smooth_array = savgol_filter(grade_array, window_length=9, polyorder=2)
+                    grade_smooth_array = savgol_filter(grade_array, window_length=15, polyorder=2)
                     data_df.loc[grade_valid, 'road_grade_percent'] = grade_smooth_array
                 except ValueError:
                     # Fallback to rolling mean if not enough points
