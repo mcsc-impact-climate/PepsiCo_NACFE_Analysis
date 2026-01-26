@@ -95,8 +95,10 @@ def get_file_list(top_dir):
         ]
         names = [file.split('/')[-1].split('_spd_dist')[0] for file in files]
     else:  # messy_middle
-        # While debugging Saia, limit to Saia only for faster iteration
         files = [
+            f'{top_dir}/data_messy_middle/nevoya.csv',
+            f'{top_dir}/data_messy_middle/4gen.csv',
+            f'{top_dir}/data_messy_middle/joyride.csv',
             f'{top_dir}/data_messy_middle/saia1_with_elevation.csv',
             f'{top_dir}/data_messy_middle/saia2_with_elevation.csv'
         ]
@@ -106,7 +108,7 @@ def get_file_list(top_dir):
         for f in files:
             base = os.path.basename(f)
             name = base.split('.')[0]
-            name = name.replace('_with_elevation', '')
+            name = name.replace('_with_elevation', '').replace('_with_driving_charging', '')
             names.append(name)
     
     return files, names
@@ -460,8 +462,8 @@ def analyze_elevation_grade(top_dir, names):
         )
         data_df_plot = data_df.iloc[::100]
         
-        # Create three-panel figure: speed vs time, elevation vs time, grade vs time
-        fig, axs = plt.subplots(3, 1, figsize=(16, 10), gridspec_kw={'height_ratios': [1, 1, 1]})
+        # Create four-panel figure: speed vs time, elevation vs time, grade vs time, SOC vs time
+        fig, axs = plt.subplots(4, 1, figsize=(16, 12), gridspec_kw={'height_ratios': [1, 1, 1, 1]})
         
         # Panel 1: Speed vs time
         data_speed = data_df_plot.dropna(subset=['speed', 'time_hours'])
@@ -472,18 +474,43 @@ def analyze_elevation_grade(top_dir, names):
         axs[0].tick_params(axis='both', which='major', labelsize=12)
         axs[0].xaxis.set_tick_params(labelbottom=False)
         
+        # Panel 2: Elevation vs time
+        elevation_col = get_column_name(data_df, ['elevation_final_m', 'elevation_meters'])
+        data_elev = data_df_plot.dropna(subset=[elevation_col, 'time_hours'])
+        axs[1].plot(data_elev['time_hours'], data_elev[elevation_col], linewidth=1.5, color='darkorange')
+        axs[1].set_ylabel('Elevation (m)', fontsize=16)
+        axs[1].set_xlim(data_df['time_hours'].min(), data_df['time_hours'].max())
+        axs[1].grid(True, alpha=0.3)
+        axs[1].tick_params(axis='both', which='major', labelsize=12)
+        axs[1].xaxis.set_tick_params(labelbottom=False)
+        
         # Panel 3: Road grade vs time
         data_grade = data_df_plot.dropna(subset=['road_grade_percent', 'time_hours'])
         axs[2].plot(data_grade['time_hours'], data_grade['road_grade_percent'], linewidth=1.5, color='darkgreen')
         axs[2].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
         axs[2].set_ylabel('Road Grade (%)', fontsize=16)
-        axs[2].set_xlabel('Time Elapsed (hours)', fontsize=16)
         axs[2].set_xlim(data_df['time_hours'].min(), data_df['time_hours'].max())
         axs[2].grid(True, alpha=0.3)
         axs[2].tick_params(axis='both', which='major', labelsize=12)
+        axs[2].xaxis.set_tick_params(labelbottom=False)
+        
+        # Panel 4: State of charge vs time
+        soc_col = get_column_name(data_df, ['socpercent', 'battery_percent'])
+        if soc_col:
+            data_soc = data_df_plot.dropna(subset=[soc_col, 'time_hours'])
+            axs[3].plot(data_soc['time_hours'], data_soc[soc_col], linewidth=1.5, color='purple')
+            axs[3].set_ylabel('SOC (%)', fontsize=16)
+            axs[3].set_xlabel('Time Elapsed (hours)', fontsize=16)
+            axs[3].set_xlim(data_df['time_hours'].min(), data_df['time_hours'].max())
+            axs[3].grid(True, alpha=0.3)
+            axs[3].tick_params(axis='both', which='major', labelsize=12)
+        else:
+            axs[3].text(0.5, 0.5, 'SOC data not available', ha='center', va='center', fontsize=14, transform=axs[3].transAxes)
+            axs[3].set_ylabel('SOC (%)', fontsize=16)
+            axs[3].set_xlabel('Time Elapsed (hours)', fontsize=16)
         
         # Add title
-        fig.suptitle(f"{name.replace('_', ' ').capitalize()}: Speed, Elevation, and Road Grade Over Time", 
+        fig.suptitle(f"{name.replace('_', ' ').capitalize()}: Speed, Elevation, Road Grade, and SOC Over Time", 
                     fontsize=18, fontweight='bold')
         
         plt.tight_layout()
@@ -1026,7 +1053,29 @@ def analyze_battery_capacity(top_dir, names):
     
     battery_capacity_save['average'] = [np.mean(battery_capacities), np.std(battery_capacities)]
     battery_capacity_save.to_csv(f'{table_dir}/battery_capacities.csv')
-    print(f"  ✓ Saved {DATASET_TYPE} battery capacities summary")
+    print(f"  ✓ Saved {DATASET_TYPE} battery capacities summary (quadratic fits)")
+    
+    # Save battery capacities from linear fits
+    battery_capacity_save_linear = pd.DataFrame({'Value': ['Mean', 'Standard Deviation']})
+    battery_capacities_linear = []
+    for i, name in enumerate(names):
+        battery_data_linearfit_df = pd.read_csv(f'{table_dir}/{name}_battery_data_linearfit.csv')
+        
+        # Skip trucks with no valid charging events
+        if len(battery_data_linearfit_df) == 0:
+            battery_capacity_save_linear[name] = [np.nan, np.nan]
+            continue
+        
+        weighted_mean = np.average(battery_data_linearfit_df['battery_size'], 
+                                  weights=1./battery_data_linearfit_df['battery_size_unc']**2)
+        weighted_std = np.sqrt(np.average((battery_data_linearfit_df['battery_size']-weighted_mean)**2, 
+                                         weights=1./battery_data_linearfit_df['battery_size_unc']**2))
+        battery_capacity_save_linear[name] = [weighted_mean, weighted_std]
+        battery_capacities_linear.append(weighted_mean)
+    
+    battery_capacity_save_linear['average'] = [np.mean(battery_capacities_linear), np.std(battery_capacities_linear)]
+    battery_capacity_save_linear.to_csv(f'{table_dir}/battery_capacities_linear.csv')
+    print(f"  ✓ Saved {DATASET_TYPE} battery capacities summary (linear fits)")
 
 def analyze_charging_time_dod(top_dir, names):
     """Analyze charging time and depth of discharge."""
@@ -1197,30 +1246,26 @@ def analyze_drive_cycles(top_dir, names):
             ):
                 continue
             
-            # For Saia datasets: now trim to only the continuous block with elevation data
-            # This removes pre/post periods where elevation_final_m is entirely NaN
+            # Trim to the largest continuous block with elevation data (all datasets)
             elevation_valid_mask = pd.Series(True, index=data_df_event.index)  # default: all valid
-            if 'saia' in name.lower() and 'elevation_final_m' in data_df_event.columns:
-                has_elevation = data_df_event['elevation_final_m'].notna()
+            elevation_col_trim = get_column_name(data_df_event, ['elevation_final_m', 'elevation_meters'])
+            if elevation_col_trim and elevation_col_trim in data_df_event.columns:
+                has_elevation = data_df_event[elevation_col_trim].notna()
                 if has_elevation.sum() > 0:
-                    # Find continuous blocks of elevation data
                     elev_groups = (has_elevation != has_elevation.shift()).cumsum()
-                    # Get the largest block with elevation data
                     largest_block = has_elevation.groupby(elev_groups).sum().idxmax()
                     block_mask = (elev_groups == largest_block)
-                    elevation_valid_mask = block_mask.copy()  # Mark which rows are in elevation-valid block
+                    elevation_valid_mask = block_mask.copy()
                     data_df_event = data_df_event[block_mask].copy()
 
-                    # Within the elevation block, interpolate any occasional NaNs in elevation_final_m
-                    if 'elevation_final_m' in data_df_event.columns:
-                        data_df_event['elevation_final_m'] = data_df_event['elevation_final_m'].interpolate(
+                    # Within the elevation block, interpolate any occasional NaNs
+                    data_df_event[elevation_col_trim] = data_df_event[elevation_col_trim].interpolate(
+                        method='linear', limit_direction='both'
+                    )
+                    if 'elevation_smooth' in data_df_event.columns:
+                        data_df_event['elevation_smooth'] = data_df_event['elevation_smooth'].interpolate(
                             method='linear', limit_direction='both'
                         )
-                        # Also interpolate elevation_smooth within this block
-                        if 'elevation_smooth' in data_df_event.columns:
-                            data_df_event['elevation_smooth'] = data_df_event['elevation_smooth'].interpolate(
-                                method='linear', limit_direction='both'
-                            )
 
             # If trimming removed everything, skip this cycle
             if data_df_event.empty:
@@ -1391,7 +1436,7 @@ def analyze_drive_cycles(top_dir, names):
                     print(f"    Drive cycle {driving_event}: elevation_valid={elevation_valid}, grade_valid={grade_valid}")
                 
                 if elevation_valid and grade_valid:
-                    fig, axs = plt.subplots(6, 1, figsize=(14, 18), gridspec_kw={'height_ratios': [1, 1, 1, 1, 1, 1]})
+                    fig, axs = plt.subplots(7, 1, figsize=(14, 21), gridspec_kw={'height_ratios': [1, 1, 1, 1, 1, 1, 1]})
                     
                     # For grade panel: exclude edges to eliminate boundary artifacts
                     # Use max of 10 points or 5% of cycle length (whichever larger), capped at 25% of cycle
@@ -1403,33 +1448,23 @@ def analyze_drive_cycles(top_dir, names):
                     data_df_event_core = data_df_event.iloc[valid_idx].copy()
                     data_df_event_with_elevation_core = data_df_event_with_elevation.iloc[valid_idx].copy()
                     
-                    # Optional background overlays: full event (pre elevation trim), semi-opaque
+                    # Optional background overlays: full event (pre elevation trim), semi-opaque (all datasets)
                     background_available = False
-                    if 'saia' in name.lower():
-                        try:
-                            bg_time = data_df_event_full['time_elapsed']
-                            # Use raw speed for background (no smoothing outside selected region)
-                            bg_speed = data_df_event_full['speed']
-                            # Use raw elevation for background (semi-opaque)
-                            bg_elev_raw = None
-                            if elevation_col in data_df_event_full_with_elevation.columns:
-                                bg_elev_raw = data_df_event_full_with_elevation[elevation_col]
-                            background_available = True
-                        except Exception:
-                            background_available = False
+                    try:
+                        bg_time = data_df_event_full['time_elapsed']
+                        bg_speed = data_df_event_full['speed']
+                        bg_elev_raw = data_df_event_full_with_elevation[elevation_col] if elevation_col in data_df_event_full_with_elevation.columns else None
+                        background_available = True
+                    except Exception:
+                        background_available = False
 
-                    # For Saia: create mask for periods WITH elevation data (for opacity control)
-                    # Only show fully opaque data where we have actual elevation measurements
-                    if 'saia' in name.lower():
-                        has_elevation_mask = data_df_event_with_elevation_core[elevation_col].notna()
-                    else:
-                        # For non-Saia, assume all data is valid
-                        has_elevation_mask = pd.Series(True, index=data_df_event_with_elevation_core.index)
+                    # Mask for periods WITH elevation data (for opacity control)
+                    has_elevation_mask = data_df_event_with_elevation_core[elevation_col].notna()
                     
                     # Panel 1: Speed vs time (overlay raw and smoothed)
                     data_speed_plot = data_df_event_core.dropna(subset=['speed'])
-                    # Raw speed (semi-opaque across full event - consistent opacity)
-                    if 'saia' in name.lower() and background_available:
+                    # Raw speed background across full event
+                    if background_available:
                         axs[0].plot(
                             bg_time,
                             bg_speed,
@@ -1438,7 +1473,6 @@ def analyze_drive_cycles(top_dir, names):
                             alpha=0.35,
                         )
                     else:
-                        # For non-Saia, plot raw speed from selected region
                         axs[0].plot(
                             data_speed_plot['time_elapsed'],
                             data_speed_plot['speed'],
@@ -1446,30 +1480,29 @@ def analyze_drive_cycles(top_dir, names):
                             color='steelblue',
                             alpha=0.35,
                         )
-                    # Smoothed speed from additional columns if available (fully opaque only where we have elevation)
+                    # Smoothed speed: opaque where elevation exists, semi-opaque where missing
                     if 'speed_smooth' in data_df_event_with_elevation_core.columns:
                         speed_smooth_series = data_df_event_with_elevation_core['speed_smooth']
-                        # For Saia: show only opaque data where elevation exists
-                        if 'saia' in name.lower():
-                            speed_smooth_with_elev = speed_smooth_series[has_elevation_mask]
+                        speed_smooth_with_elev = speed_smooth_series[has_elevation_mask]
+                        axs[0].plot(
+                            data_df_event_core['time_elapsed'][has_elevation_mask],
+                            speed_smooth_with_elev,
+                            linewidth=2,
+                            color='royalblue',
+                        )
+                        no_elev_mask = ~has_elevation_mask
+                        if no_elev_mask.sum() > 0:
                             axs[0].plot(
-                                data_df_event_core['time_elapsed'][has_elevation_mask],
-                                speed_smooth_with_elev,
+                                data_df_event_core['time_elapsed'][no_elev_mask],
+                                speed_smooth_series[no_elev_mask],
                                 linewidth=2,
                                 color='royalblue',
-                            )
-                        else:
-                            axs[0].plot(
-                                data_df_event_core['time_elapsed'],
-                                speed_smooth_series,
-                                linewidth=2,
-                                color='royalblue',
+                                alpha=0.2,
                             )
                     axs[0].set_ylabel('Speed (mph)', fontsize=16)
                     axs[0].grid(True, alpha=0.3)
                     axs[0].tick_params(axis='both', which='major', labelsize=12)
-                    # Set x-axis limits to span full original drive cycle period
-                    if 'saia' in name.lower() and background_available:
+                    if background_available:
                         axs[0].set_xlim(bg_time.min(), bg_time.max())
                     
                     # Panel 2: Elevation vs time
@@ -1477,38 +1510,26 @@ def analyze_drive_cycles(top_dir, names):
                     elev_smooth_available = 'elevation_smooth' in data_df_event_with_elevation_core.columns and \
                         data_df_event_with_elevation_core['elevation_smooth'].notna().sum() > 0
 
-                    # Plot smoothed elevation (dark orange) - for Saia, only show fully opaque where elevation exists
+                    # Plot smoothed elevation (dark orange) with opacity tied to elevation availability
                     if elev_smooth_available:
                         elev_smooth_vals = data_df_event_with_elevation_core['elevation_smooth']
-                        
-                        # For Saia: plot opaque elevation_smooth only in regions with elevation data
-                        if 'saia' in name.lower():
-                            elev_smooth_with_data = elev_smooth_vals[has_elevation_mask]
+                        elev_smooth_with_data = elev_smooth_vals[has_elevation_mask]
+                        axs[1].plot(
+                            data_df_event_core['time_elapsed'][has_elevation_mask],
+                            elev_smooth_with_data,
+                            linewidth=2,
+                            color='darkorange',
+                            label='elevation_smooth (regions with elevation data)'
+                        )
+                        no_elev_mask = ~has_elevation_mask
+                        if no_elev_mask.sum() > 0:
                             axs[1].plot(
-                                data_df_event_core['time_elapsed'][has_elevation_mask],
-                                elev_smooth_with_data,
+                                data_df_event_core['time_elapsed'][no_elev_mask],
+                                elev_smooth_vals[no_elev_mask],
                                 linewidth=2,
                                 color='darkorange',
-                                label='elevation_smooth (regions with elevation data)'
-                            )
-                            # Plot extrapolated regions as semi-transparent
-                            no_elev_mask = ~has_elevation_mask
-                            if no_elev_mask.sum() > 0:
-                                axs[1].plot(
-                                    data_df_event_core['time_elapsed'][no_elev_mask],
-                                    elev_smooth_vals[no_elev_mask],
-                                    linewidth=2,
-                                    color='darkorange',
-                                    alpha=0.2,
-                                    label='elevation_smooth (extrapolated, no data)'
-                                )
-                        else:
-                            axs[1].plot(
-                                data_df_event_core['time_elapsed'],
-                                elev_smooth_vals,
-                                linewidth=2,
-                                color='darkorange',
-                                label='elevation_smooth (used for grades)'
+                                alpha=0.2,
+                                label='elevation_smooth (extrapolated, no data)'
                             )
                         
                         n_zeros_smooth = (elev_smooth_vals == 0).sum()
@@ -1536,8 +1557,7 @@ def analyze_drive_cycles(top_dir, names):
                     axs[1].set_ylabel('Elevation (meters)', fontsize=16)
                     axs[1].grid(True, alpha=0.3)
                     axs[1].tick_params(axis='both', which='major', labelsize=12)
-                    # Set x-axis limits to span full original drive cycle period
-                    if 'saia' in name.lower() and background_available:
+                    if background_available:
                         axs[1].set_xlim(bg_time.min(), bg_time.max())
                     
                     # Panel 3: Road grade vs time (edges removed for consistency across panels)
@@ -1585,40 +1605,38 @@ def analyze_drive_cycles(top_dir, names):
                                     )
                         
                         # For Saia: plot final grade only in regions with elevation data
-                        if 'saia' in name.lower():
-                            grade_with_elev = grade_mask & has_elevation_mask
-                            if grade_with_elev.sum() > 0:
-                                axs[2].plot(
-                                    data_df_event_core.loc[grade_with_elev, 'time_elapsed'],
-                                    data_df_event_with_elevation_core.loc[grade_with_elev, 'road_grade_percent'],
-                                    linewidth=2,
-                                    color='darkgreen',
-                                    label='Road grade (regions with elevation data)'
-                                )
-                            # Plot grades in non-elevation regions as semi-transparent
-                            grade_no_elev = grade_mask & (~has_elevation_mask)
-                            if grade_no_elev.sum() > 0:
-                                axs[2].plot(
-                                    data_df_event_core.loc[grade_no_elev, 'time_elapsed'],
-                                    data_df_event_with_elevation_core.loc[grade_no_elev, 'road_grade_percent'],
-                                    linewidth=2,
-                                    color='darkgreen',
-                                    alpha=0.2,
-                                    label='Road grade (extrapolated, no data)'
-                                )
-                        else:
-                            axs[2].plot(time_for_grade, grade_values, linewidth=2, color='darkgreen')
+                        grade_with_elev = grade_mask & has_elevation_mask
+                        if grade_with_elev.sum() > 0:
+                            axs[2].plot(
+                                data_df_event_core.loc[grade_with_elev, 'time_elapsed'],
+                                data_df_event_with_elevation_core.loc[grade_with_elev, 'road_grade_percent'],
+                                linewidth=2,
+                                color='darkgreen',
+                                label='Road grade (regions with elevation data)'
+                            )
+                        grade_no_elev = grade_mask & (~has_elevation_mask)
+                        if grade_no_elev.sum() > 0:
+                            axs[2].plot(
+                                data_df_event_core.loc[grade_no_elev, 'time_elapsed'],
+                                data_df_event_with_elevation_core.loc[grade_no_elev, 'road_grade_percent'],
+                                linewidth=2,
+                                color='darkgreen',
+                                alpha=0.2,
+                                label='Road grade (extrapolated, no data)'
+                            )
 
                     axs[2].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
                     axs[2].set_ylabel('Road Grade (%)', fontsize=16)
                     axs[2].grid(True, alpha=0.3)
                     axs[2].tick_params(axis='both', which='major', labelsize=12)
                     axs[2].set_ylim(-10, 10)
-                    # Set x-axis limits to span full original drive cycle period
-                    if 'saia' in name.lower() and background_available:
+                    if background_available:
                         axs[2].set_xlim(bg_time.min(), bg_time.max())
 
                     # Panel 4: Payload (weight_kg) vs time
+                    if 'saia' in name.lower():
+                        data_df_event_with_elevation_core['weight_kg'] = 31000.0
+                        data_df_event_core['weight_kg'] = 31000.0
                     payload_mask = data_df_event_with_elevation_core['weight_kg'].notna()
                     if payload_mask.sum() > 0:
                         time_for_payload = data_df_event_core.loc[payload_mask, 'time_elapsed']
@@ -1627,9 +1645,22 @@ def analyze_drive_cycles(top_dir, names):
                     axs[3].set_ylabel('Payload (kg)', fontsize=16)
                     axs[3].grid(True, alpha=0.3)
                     axs[3].tick_params(axis='both', which='major', labelsize=12)
-                    # Set x-axis limits to span full original drive cycle period
-                    if 'saia' in name.lower() and background_available:
+                    if background_available:
                         axs[3].set_xlim(bg_time.min(), bg_time.max())
+
+                    # Panel 4: State of charge vs time
+                    soc_col = get_column_name(data_df_event_with_elevation_core, ['socpercent', 'battery_percent'])
+                    if soc_col:
+                        soc_mask = data_df_event_with_elevation_core[soc_col].notna()
+                        if soc_mask.sum() > 0:
+                            time_for_soc = data_df_event_core.loc[soc_mask, 'time_elapsed']
+                            soc_values = data_df_event_with_elevation_core.loc[soc_mask, soc_col]
+                            axs[4].plot(time_for_soc, soc_values, linewidth=2, color='purple')
+                    axs[4].set_ylabel('SOC (%)', fontsize=16)
+                    axs[4].grid(True, alpha=0.3)
+                    axs[4].tick_params(axis='both', which='major', labelsize=12)
+                    if background_available:
+                        axs[4].set_xlim(bg_time.min(), bg_time.max())
 
                     # Panel 5: Driving energy deltas per distance step (energy consumption)
                     # First, compute energy for FULL event (for raw data across full period)
@@ -1667,7 +1698,7 @@ def analyze_drive_cycles(top_dir, names):
                     
                     # For Saia: plot raw energy at consistent opacity across full period (original data before outlier removal)
                     if 'saia' in name.lower() and background_available and energy_mask_drive_raw_full.sum() > 0:
-                        axs[4].plot(
+                        axs[5].plot(
                             energy_df_full_orig.loc[energy_mask_drive_raw_full, 'time_elapsed'],
                             raw_driving_diffs_full.loc[energy_mask_drive_raw_full],
                             linewidth=1.2,
@@ -1685,8 +1716,8 @@ def analyze_drive_cycles(top_dir, names):
                             pad = 0.1 * max_abs if max_abs > 0 else 0.1
                             y_max_plot = mean_diff + max_abs + pad
                             y_min_plot = mean_diff - max_abs - pad
-                            axs[4].axhspan(upper_thr_full, y_max_plot, color='red', alpha=0.06, zorder=0)
-                            axs[4].axhspan(y_min_plot, lower_thr_full, color='red', alpha=0.06, zorder=0)
+                            axs[5].axhspan(upper_thr_full, y_max_plot, color='red', alpha=0.06, zorder=0)
+                            axs[5].axhspan(y_min_plot, lower_thr_full, color='red', alpha=0.06, zorder=0)
                     
                     # Now restrict to elevation-valid region for analysis
                     # Use cleaned driving energy data (with outliers removed and interpolated)
@@ -1719,7 +1750,7 @@ def analyze_drive_cycles(top_dir, names):
                     ) & energy_df['driving_energy_diffs'].notna()
 
                     if energy_mask_drive.sum() > 0:
-                        axs[4].plot(
+                        axs[5].plot(
                             energy_df.loc[energy_mask_drive, 'time_elapsed'],
                             energy_df.loc[energy_mask_drive, 'driving_energy_diffs'],
                             linewidth=2,
@@ -1734,13 +1765,13 @@ def analyze_drive_cycles(top_dir, names):
                             mean_diff - lower_thr_full
                         )
                         pad = 0.1 * max_abs if max_abs > 0 else 0.1
-                        axs[4].set_ylim(mean_diff - max_abs - pad, mean_diff + max_abs + pad)
-                    axs[4].set_ylabel('Driving energy delta (kWh/step)', fontsize=16)
-                    axs[4].grid(True, alpha=0.3)
-                    axs[4].tick_params(axis='both', which='major', labelsize=12)
+                        axs[5].set_ylim(mean_diff - max_abs - pad, mean_diff + max_abs + pad)
+                    axs[5].set_ylabel('Driving energy delta (kWh/step)', fontsize=16)
+                    axs[5].grid(True, alpha=0.3)
+                    axs[5].tick_params(axis='both', which='major', labelsize=12)
                     # Set x-axis limits to span full original drive cycle period
                     if 'saia' in name.lower() and background_available:
-                        axs[4].set_xlim(bg_time.min(), bg_time.max())
+                        axs[5].set_xlim(bg_time.min(), bg_time.max())
 
                     # Panel 6: Instantaneous energy economy vs time (Saia limited to elevation-valid region)
                     # First, compute instantaneous energy for FULL event (for raw data across full period)
@@ -1757,14 +1788,14 @@ def analyze_drive_cycles(top_dir, names):
                         energy_df_full_orig['distance_diffs_full'].abs() > DISTANCE_UNCERTAINTY
                     ) & raw_inst_energy_full.notna()
                     
-                    # For Saia: plot raw instantaneous energy at consistent opacity across full period
-                    if 'saia' in name.lower() and background_available and energy_mask_inst_raw_full.sum() > 0:
+                    # Plot raw instantaneous energy (odometer distance) across full period
+                    if energy_mask_inst_raw_full.sum() > 0:
                         raw_vals = raw_inst_energy_full.loc[energy_mask_inst_raw_full]
                         print(f"DEBUG Drive cycle {driving_event} - Raw inst energy:")
                         print(f"  Distance diffs (raw odometer) - min: {energy_df_full_orig.loc[energy_mask_inst_raw_full, 'distance_diffs_full'].min():.6f}, max: {energy_df_full_orig.loc[energy_mask_inst_raw_full, 'distance_diffs_full'].max():.6f}, mean: {energy_df_full_orig.loc[energy_mask_inst_raw_full, 'distance_diffs_full'].mean():.6f}")
                         print(f"  Raw inst energy values - min: {raw_vals.min(skipna=True):.4f}, max: {raw_vals.max(skipna=True):.4f}, mean: {raw_vals.mean(skipna=True):.4f}, count: {raw_vals.count()}")
                         
-                        axs[5].plot(
+                        axs[6].plot(
                             energy_df_full_orig.loc[energy_mask_inst_raw_full, 'time_elapsed'],
                             raw_inst_energy_full.loc[energy_mask_inst_raw_full],
                             linewidth=1.5,
@@ -1777,6 +1808,14 @@ def analyze_drive_cycles(top_dir, names):
                     # Regen deltas from raw energy; drop resets so only actual recovery remains
                     regen_diff_raw = energy_df[regen_energy_col].diff()
                     energy_df['regen_energy_diffs'] = regen_diff_raw.where(regen_diff_raw >= 0, np.nan)
+                    
+                    # If regen column is sparse/missing, fill NaN with 0 (no regen during those periods)
+                    # This allows inst_energy calculation to proceed using driving energy only
+                    energy_df['regen_energy_diffs'] = energy_df['regen_energy_diffs'].fillna(0.0)
+                    
+                    # DEBUG: Check if regen column has issues
+                    if regen_energy_col == driving_energy_col:
+                        print(f"    WARNING Drive cycle {driving_event}: No separate regen column found, using {driving_energy_col} for both")
 
                     # Distance deltas for instantaneous energy using smoothed speed
                     distance_diffs_inst = energy_df['distance_diffs'].copy()
@@ -1793,24 +1832,57 @@ def analyze_drive_cycles(top_dir, names):
                     energy_mask = (
                         energy_df['distance_diffs_inst'].abs() > DISTANCE_UNCERTAINTY
                     ) & energy_df['inst_energy_per_mile'].notna()
-
+                    
+                    # Diagnostic: identify periods where inst energy is undefined
+                    missing_inst_energy = ~energy_mask & energy_df['driving_energy_diffs'].notna()
+                    if missing_inst_energy.sum() > 0:
+                        try:
+                            pct_missing = (missing_inst_energy.sum() / len(energy_df)) * 100
+                            print(f"    Drive cycle {driving_event}: {missing_inst_energy.sum()} samples ({pct_missing:.1f}%) excluded from inst energy")
+                            # Show time ranges where inst energy is missing
+                            missing_times = energy_df.loc[missing_inst_energy, 'time_elapsed']
+                            if len(missing_times) > 0:
+                                print(f"      Missing inst energy at times: {missing_times.min():.1f}-{missing_times.max():.1f} min")
+                            
+                            # Detailed diagnostic for missing periods - check all components
+                            missing_driving = energy_df.loc[missing_inst_energy, 'driving_energy_diffs']
+                            missing_regen = energy_df.loc[missing_inst_energy, 'regen_energy_diffs']
+                            missing_regen_raw = regen_diff_raw.loc[missing_inst_energy]
+                            missing_regen_abs = energy_df.loc[missing_inst_energy, regen_energy_col]
+                            missing_dists = energy_df.loc[missing_inst_energy, 'distance_diffs_inst']
+                            missing_inst = energy_df.loc[missing_inst_energy, 'inst_energy_per_mile']
+                            
+                            print(f"      Driving energy (kWh): defined={missing_driving.notna().sum()}/{len(missing_driving)}, range=[{missing_driving.min():.3f}, {missing_driving.max():.3f}]")
+                            print(f"      Regen energy raw diff: defined={missing_regen_raw.notna().sum()}/{len(missing_regen_raw)}, negative={(missing_regen_raw < 0).sum()}, range=[{missing_regen_raw.min():.3f}, {missing_regen_raw.max():.3f}]")
+                            print(f"      Regen energy absolute values: defined={missing_regen_abs.notna().sum()}/{len(missing_regen_abs)}, range=[{missing_regen_abs.min():.3f}, {missing_regen_abs.max():.3f}]")
+                            print(f"      Regen energy (filtered): defined={missing_regen.notna().sum()}/{len(missing_regen)}")
+                            print(f"      Distance diffs (mi): defined={missing_dists.notna().sum()}/{len(missing_dists)}, range=[{missing_dists.min():.6f}, {missing_dists.max():.6f}]")
+                            print(f"      Inst energy (kWh/mi): defined={missing_inst.notna().sum()}/{len(missing_inst)}")
+                            print(f"      Distance < {DISTANCE_UNCERTAINTY} mi: {(missing_dists.abs() <= DISTANCE_UNCERTAINTY).sum()}/{len(missing_dists)}")
+                        except Exception as e:
+                            print(f"      ERROR in diagnostics: {e}")
+                    
+                    # Restrict ALL visualizations to periods where inst energy is well-defined
+                    # This ensures consistency across speed/elevation/grade/energy panels
+                    energy_df_valid = energy_df.loc[energy_mask].copy()
+                    
                     if energy_mask.sum() > 0:
-                        final_vals = energy_df.loc[energy_mask, 'inst_energy_per_mile']
-                        print(f"DEBUG Drive cycle {driving_event} - Final inst energy (elevation-valid region):")
-                        print(f"  Distance diffs (smoothed speed) - min: {energy_df.loc[energy_mask, 'distance_diffs_inst'].min():.6f}, max: {energy_df.loc[energy_mask, 'distance_diffs_inst'].max():.6f}, mean: {energy_df.loc[energy_mask, 'distance_diffs_inst'].mean():.6f}")
-                        print(f"  Final inst energy values - min: {final_vals.min(skipna=True):.4f}, max: {final_vals.max(skipna=True):.4f}, mean: {final_vals.mean(skipna=True):.4f}, count: {final_vals.count()}")
+                        final_vals = energy_df_valid['inst_energy_per_mile']
+                        print(f"    Drive cycle {driving_event} - Final inst energy (well-defined region):")
+                        print(f"      Distance diffs (smoothed speed) - min: {energy_df_valid['distance_diffs_inst'].min():.6f}, max: {energy_df_valid['distance_diffs_inst'].max():.6f}, mean: {energy_df_valid['distance_diffs_inst'].mean():.6f}")
+                        print(f"      Final inst energy values - min: {final_vals.min(skipna=True):.4f}, max: {final_vals.max(skipna=True):.4f}, mean: {final_vals.mean(skipna=True):.4f}, count: {final_vals.count()}")
                         
-                        axs[5].plot(
-                            energy_df.loc[energy_mask, 'time_elapsed'],
-                            energy_df.loc[energy_mask, 'inst_energy_per_mile'],
+                        axs[6].plot(
+                            energy_df_valid['time_elapsed'],
+                            energy_df_valid['inst_energy_per_mile'],
                             linewidth=2,
                             color='purple',
                             label='Final (smoothed-speed distance)'
                         )
                         # Set y-limits: use BOTH raw and final ranges, but exclude extreme outliers in raw trace
                         # This shows the difference while keeping axis reasonable
-                        y_min_inst = energy_df.loc[energy_mask, 'inst_energy_per_mile'].min(skipna=True)
-                        y_max_inst = energy_df.loc[energy_mask, 'inst_energy_per_mile'].max(skipna=True)
+                        y_min_inst = energy_df_valid['inst_energy_per_mile'].min(skipna=True)
+                        y_max_inst = energy_df_valid['inst_energy_per_mile'].max(skipna=True)
                         
                         # For raw trace: use 99th percentile to exclude extreme single-point spikes but still show real differences
                         if energy_mask_inst_raw_full.sum() > 0:
@@ -1824,14 +1896,13 @@ def analyze_drive_cycles(top_dir, names):
                         combined_min = np.nanmin([y_min_inst, y_min_raw])
                         combined_max = np.nanmax([y_max_inst, y_max_raw])
                         pad_inst = 0.1 * (combined_max - combined_min) if (combined_max - combined_min) > 0 else 0.1
-                        axs[5].set_ylim(combined_min - pad_inst, combined_max + pad_inst)
-                    axs[5].set_ylabel('Inst. energy (kWh/mile)', fontsize=16)
-                    axs[5].set_xlabel('Drive time (minutes)', fontsize=16)
-                    axs[5].grid(True, alpha=0.3)
-                    axs[5].tick_params(axis='both', which='major', labelsize=12)
-                    # Set x-axis limits to span full original drive cycle period
-                    if 'saia' in name.lower() and background_available:
-                        axs[5].set_xlim(bg_time.min(), bg_time.max())
+                        axs[6].set_ylim(combined_min - pad_inst, combined_max + pad_inst)
+                    axs[6].set_ylabel('Inst. energy (kWh/mile)', fontsize=16)
+                    axs[6].set_xlabel('Drive time (minutes)', fontsize=16)
+                    axs[6].grid(True, alpha=0.3)
+                    axs[6].tick_params(axis='both', which='major', labelsize=12)
+                    if background_available:
+                        axs[6].set_xlim(bg_time.min(), bg_time.max())
                     
                     # Add title
                     fig.suptitle(f"{name.replace('_', ' ').capitalize()}: Drive Cycle {driving_event} - Speed, Elevation, and Grade", 
@@ -2154,11 +2225,11 @@ def main():
     
     # ======== UNCOMMENT/COMMENT SECTIONS TO RUN ========
     
-    # Stage 1: Data Preprocessing
-    preprocess_data(top_dir, files, names)
+    # # Stage 1: Data Preprocessing
+    # preprocess_data(top_dir, files, names)
     
-    # Stage 1.5: Elevation and Road Grade Analysis
-    analyze_elevation_grade(top_dir, names)
+    # # Stage 1.5: Elevation and Road Grade Analysis
+    # analyze_elevation_grade(top_dir, names)
     
     # # Stage 2: Charging Analysis
     # analyze_charging_power(top_dir, names)
@@ -2169,14 +2240,14 @@ def main():
     # # Stage 4: Prepare Driving/Charging Events
     # prepare_driving_charging_data(top_dir, names)
     
-    # # Stage 5: Battery Capacity Analysis
-    # analyze_battery_capacity(top_dir, names)
+    # Stage 5: Battery Capacity Analysis
+    analyze_battery_capacity(top_dir, names)
     
     # # Stage 6: Charging Time & DoD
     # analyze_charging_time_dod(top_dir, names)
     
-    # Stage 7: Drive Cycles
-    analyze_drive_cycles(top_dir, names)
+    # # Stage 7: Drive Cycles
+    # analyze_drive_cycles(top_dir, names)
     
     # # Stage 8: VMT Analysis
     # analyze_vmt(top_dir, names)
