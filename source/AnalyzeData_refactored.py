@@ -96,7 +96,7 @@ def get_file_list(top_dir):
         names = [file.split('/')[-1].split('_spd_dist')[0] for file in files]
     else:  # messy_middle
         files = [
-            f'{top_dir}/data_messy_middle/nevoya.csv',
+            f'{top_dir}/data_messy_middle/nevoya_with_weight.csv',
             f'{top_dir}/data_messy_middle/4gen.csv',
             f'{top_dir}/data_messy_middle/joyride.csv',
             f'{top_dir}/data_messy_middle/saia1_with_elevation.csv',
@@ -494,12 +494,14 @@ def analyze_elevation_grade(top_dir, names):
         axs[2].tick_params(axis='both', which='major', labelsize=12)
         axs[2].xaxis.set_tick_params(labelbottom=False)
         
-        # Panel 4: State of charge vs time
+        # Panel 4: State of charge vs time (delta SOC - point-to-point differences)
         soc_col = get_column_name(data_df, ['socpercent', 'battery_percent'])
         if soc_col:
             data_soc = data_df_plot.dropna(subset=[soc_col, 'time_hours'])
-            axs[3].plot(data_soc['time_hours'], data_soc[soc_col], linewidth=1.5, color='purple')
-            axs[3].set_ylabel('SOC (%)', fontsize=16)
+            delta_soc = data_soc[soc_col].diff()
+            axs[3].plot(data_soc['time_hours'], delta_soc, linewidth=1.5, color='purple')
+            axs[3].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+            axs[3].set_ylabel('Δ SOC (%)', fontsize=16)
             axs[3].set_xlabel('Time Elapsed (hours)', fontsize=16)
             axs[3].set_xlim(data_df['time_hours'].min(), data_df['time_hours'].max())
             axs[3].grid(True, alpha=0.3)
@@ -1076,6 +1078,13 @@ def analyze_battery_capacity(top_dir, names):
     battery_capacity_save_linear['average'] = [np.mean(battery_capacities_linear), np.std(battery_capacities_linear)]
     battery_capacity_save_linear.to_csv(f'{table_dir}/battery_capacities_linear.csv')
     print(f"  ✓ Saved {DATASET_TYPE} battery capacities summary (linear fits)")
+    
+    # Also save to messy_middle_results directory
+    if DATASET_TYPE == 'messy_middle':
+        messy_results_dir = f'{top_dir}/messy_middle_results'
+        os.makedirs(messy_results_dir, exist_ok=True)
+        battery_capacity_save_linear.to_csv(f'{messy_results_dir}/battery_capacities_linear_summary.csv')
+        print(f"  ✓ Saved battery capacities (linear fits) to messy_middle_results/")
 
 def analyze_charging_time_dod(top_dir, names):
     """Analyze charging time and depth of discharge."""
@@ -1207,6 +1216,7 @@ def analyze_drive_cycles(top_dir, names):
     
     # Read battery capacities
     battery_capacity_df = pd.read_csv(f'{table_dir}/battery_capacities.csv')
+    battery_capacity_linear_df = pd.read_csv(f'{table_dir}/battery_capacities_linear.csv')
     
     for name in names:
         print(f"Processing {name}...")
@@ -1222,6 +1232,12 @@ def analyze_drive_cycles(top_dir, names):
         }
         
         drivecycle_data_df = pd.DataFrame(drivecycle_data_dict)
+        # Collect per-event energy total deltas for CSV output
+        energy_totals_rows = []
+        # Collect DoD summary for messy_middle_results
+        dod_summary_rows = []
+        # Collect detailed drive cycle data for messy_middle_results
+        detailed_drivecycle_dict = {}
         data_df = read_csv_cached(f'{output_dir}/{name}_with_driving_charging.csv', low_memory=False)
         
         # Also load the additional_cols file to get elevation/road_grade data
@@ -1229,6 +1245,8 @@ def analyze_drive_cycles(top_dir, names):
         
         battery_capacity = battery_capacity_df[name].iloc[0]
         battery_capacity_unc = battery_capacity_df[name].iloc[1]
+        # Linear-fit capacity for battery energy change reporting
+        battery_capacity_linear = battery_capacity_linear_df[name].iloc[0]
         
         n_driving_events = int(data_df['driving_event'].max())
         for driving_event in range(1, n_driving_events):
@@ -1436,7 +1454,7 @@ def analyze_drive_cycles(top_dir, names):
                     print(f"    Drive cycle {driving_event}: elevation_valid={elevation_valid}, grade_valid={grade_valid}")
                 
                 if elevation_valid and grade_valid:
-                    fig, axs = plt.subplots(7, 1, figsize=(14, 21), gridspec_kw={'height_ratios': [1, 1, 1, 1, 1, 1, 1]})
+                    fig, axs = plt.subplots(6, 1, figsize=(14, 18), gridspec_kw={'height_ratios': [1, 1, 1, 1, 1, 1]})
                     
                     # For grade panel: exclude edges to eliminate boundary artifacts
                     # Use max of 10 points or 5% of cycle length (whichever larger), capped at 25% of cycle
@@ -1648,21 +1666,103 @@ def analyze_drive_cycles(top_dir, names):
                     if background_available:
                         axs[3].set_xlim(bg_time.min(), bg_time.max())
 
-                    # Panel 4: State of charge vs time
+                    # Panel 5: Battery energy delta vs time (delta SOC converted to kWh, with outlier detection)
+                    battery_capacity_linear = battery_capacity_linear_df[name].iloc[0]
                     soc_col = get_column_name(data_df_event_with_elevation_core, ['socpercent', 'battery_percent'])
+                    
+                    # Compute raw delta SOC and apply 5-std outlier filtering
+                    raw_battery_energy_delta = None
+                    battery_energy_delta_clean = None
+                    soc_upper_thr = None
+                    soc_lower_thr = None
+                    soc_mean_delta = None
                     if soc_col:
                         soc_mask = data_df_event_with_elevation_core[soc_col].notna()
                         if soc_mask.sum() > 0:
-                            time_for_soc = data_df_event_core.loc[soc_mask, 'time_elapsed']
                             soc_values = data_df_event_with_elevation_core.loc[soc_mask, soc_col]
-                            axs[4].plot(time_for_soc, soc_values, linewidth=2, color='purple')
-                    axs[4].set_ylabel('SOC (%)', fontsize=16)
+                            delta_soc_values = soc_values.diff()
+                            # Convert delta SOC (%) to battery energy delta (kWh)
+                            raw_battery_energy_delta = delta_soc_values * battery_capacity_linear / 100.0
+                            
+                            # Apply 5-std outlier filtering to battery energy deltas
+                            battery_energy_delta_clean = raw_battery_energy_delta.copy()
+                            outlier_mask_soc = pd.Series(False, index=battery_energy_delta_clean.index)
+                            valid_deltas = battery_energy_delta_clean.dropna()
+                            if len(valid_deltas) > 0:
+                                soc_mean_delta = valid_deltas.mean()
+                                soc_std_delta = valid_deltas.std()
+                                if soc_std_delta > 0:
+                                    soc_upper_thr = soc_mean_delta + 5 * soc_std_delta
+                                    soc_lower_thr = soc_mean_delta - 5 * soc_std_delta
+                                    # Identify outliers: >5 std from mean
+                                    outlier_mask_soc = (np.abs(battery_energy_delta_clean - soc_mean_delta) > 5 * soc_std_delta) & battery_energy_delta_clean.notna()
+                                    # Replace outliers with NaN for interpolation
+                                    battery_energy_delta_clean[outlier_mask_soc] = np.nan
+                                    # Interpolate over outliers
+                                    battery_energy_delta_clean = battery_energy_delta_clean.interpolate(method='linear', limit_direction='both')
+                            
+                            # Plot raw battery energy deltas across full period (semi-opaque, for context)
+                            if raw_battery_energy_delta.notna().sum() > 0:
+                                axs[4].plot(
+                                    data_df_event_core.loc[soc_mask, 'time_elapsed'],
+                                    raw_battery_energy_delta.loc[soc_mask],
+                                    linewidth=1.2,
+                                    color='plum',
+                                    alpha=0.35,
+                                )
+                                # Visually mark outlier regions as symmetric full-width horizontal bands beyond ±5σ
+                                if soc_upper_thr is not None and soc_lower_thr is not None and soc_mean_delta is not None:
+                                    max_abs = max(
+                                        abs(raw_battery_energy_delta.max(skipna=True) - soc_mean_delta),
+                                        abs(raw_battery_energy_delta.min(skipna=True) - soc_mean_delta),
+                                        soc_upper_thr - soc_mean_delta,
+                                        soc_mean_delta - soc_lower_thr
+                                    )
+                                    pad = 0.1 * max_abs if max_abs > 0 else 0.1
+                                    y_max_plot = soc_mean_delta + max_abs + pad
+                                    y_min_plot = soc_mean_delta - max_abs - pad
+                                    axs[4].axhspan(soc_upper_thr, y_max_plot, color='red', alpha=0.06, zorder=0)
+                                    axs[4].axhspan(y_min_plot, soc_lower_thr, color='red', alpha=0.06, zorder=0)
+                            
+                            # Plot cleaned battery energy deltas (opaque where elevation data exists)
+                            if battery_energy_delta_clean is not None:
+                                elev_with_data = soc_mask & has_elevation_mask
+                                if elev_with_data.sum() > 0:
+                                    axs[4].plot(
+                                        data_df_event_core.loc[elev_with_data, 'time_elapsed'],
+                                        battery_energy_delta_clean.loc[elev_with_data],
+                                        linewidth=2,
+                                        color='darkorchid',
+                                    )
+                                no_elev = soc_mask & (~has_elevation_mask)
+                                if no_elev.sum() > 0:
+                                    axs[4].plot(
+                                        data_df_event_core.loc[no_elev, 'time_elapsed'],
+                                        battery_energy_delta_clean.loc[no_elev],
+                                        linewidth=2,
+                                        color='darkorchid',
+                                        alpha=0.2,
+                                    )
+                            
+                            # Set y-limits to symmetric range around mean using ±5σ envelope
+                            if soc_upper_thr is not None and soc_lower_thr is not None and soc_mean_delta is not None:
+                                max_abs = max(
+                                    abs(raw_battery_energy_delta.max(skipna=True) - soc_mean_delta),
+                                    abs(raw_battery_energy_delta.min(skipna=True) - soc_mean_delta),
+                                    soc_upper_thr - soc_mean_delta,
+                                    soc_mean_delta - soc_lower_thr
+                                )
+                                pad = 0.1 * max_abs if max_abs > 0 else 0.1
+                                axs[4].set_ylim(soc_mean_delta - max_abs - pad, soc_mean_delta + max_abs + pad)
+                    
+                    axs[4].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+                    axs[4].set_ylabel('Δ Battery Energy (kWh)', fontsize=16)
                     axs[4].grid(True, alpha=0.3)
                     axs[4].tick_params(axis='both', which='major', labelsize=12)
                     if background_available:
                         axs[4].set_xlim(bg_time.min(), bg_time.max())
 
-                    # Panel 5: Driving energy deltas per distance step (energy consumption)
+                    # Panel 6: Instantaneous energy economy vs time (using negative battery energy delta)
                     # First, compute energy for FULL event (for raw data across full period)
                     # Use data_df_event_full (original full event before elevation trimming)
                     energy_df_full_orig = data_df_event_full.copy()
@@ -1695,29 +1795,10 @@ def analyze_drive_cycles(top_dir, names):
                             driving_diffs_clean_full[outlier_mask_full] = np.nan
                             # Interpolate over outliers
                             driving_diffs_clean_full = driving_diffs_clean_full.interpolate(method='linear', limit_direction='both')
-                    
-                    # For Saia: plot raw energy at consistent opacity across full period (original data before outlier removal)
-                    if 'saia' in name.lower() and background_available and energy_mask_drive_raw_full.sum() > 0:
-                        axs[5].plot(
-                            energy_df_full_orig.loc[energy_mask_drive_raw_full, 'time_elapsed'],
-                            raw_driving_diffs_full.loc[energy_mask_drive_raw_full],
-                            linewidth=1.2,
-                            color='salmon',
-                            alpha=0.35,
-                        )
-                        # Visually mark outlier regions as symmetric full-width horizontal bands beyond ±5σ
-                        if upper_thr_full is not None and lower_thr_full is not None and mean_diff is not None:
-                            max_abs = max(
-                                abs(raw_driving_diffs_full.max(skipna=True) - mean_diff),
-                                abs(raw_driving_diffs_full.min(skipna=True) - mean_diff),
-                                upper_thr_full - mean_diff,
-                                mean_diff - lower_thr_full
-                            )
-                            pad = 0.1 * max_abs if max_abs > 0 else 0.1
-                            y_max_plot = mean_diff + max_abs + pad
-                            y_min_plot = mean_diff - max_abs - pad
-                            axs[5].axhspan(upper_thr_full, y_max_plot, color='red', alpha=0.06, zorder=0)
-                            axs[5].axhspan(y_min_plot, lower_thr_full, color='red', alpha=0.06, zorder=0)
+
+                    # Totals across the full driving event
+                    total_driving_energy_delta_full_kwh = driving_diffs_clean_full.loc[energy_df_full_orig.index][energy_mask_drive_raw_full].sum(skipna=True) if energy_mask_drive_raw_full.sum() > 0 else np.nan
+                    total_battery_energy_change_linear_kwh = (dod_full * battery_capacity_linear) / 100.0
                     
                     # Now restrict to elevation-valid region for analysis
                     # Use cleaned driving energy data (with outliers removed and interpolated)
@@ -1734,88 +1815,18 @@ def analyze_drive_cycles(top_dir, names):
                     # Map cleaned data from full event to current subset
                     energy_df['driving_energy_diffs'] = driving_diffs_clean_full.loc[energy_df.index]
 
+                    # Compute distance deltas if not present
+                    if 'accumulated_distance' in energy_df.columns:
+                        energy_df['distance_diffs'] = energy_df['accumulated_distance'].diff()
+                    else:
+                        energy_df['distance_diffs'] = np.nan
+
                     # Ensure speed_smooth exists for smoothed-speed distance calculation
                     if 'speed_smooth' not in energy_df.columns:
                         speed_window_local = 81 if 'saia' in name.lower() else 15
                         energy_df['speed_smooth'] = energy_df['speed'].rolling(
                             window=speed_window_local, center=True, min_periods=1
                         ).mean()
-
-                    # Distance deltas for masking tiny steps
-                    energy_df['distance_diffs'] = energy_df['accumulated_distance'].diff()
-                    
-                    # Plot cleaned driving energy deltas (kWh per distance step) only where elevation is valid (for Saia)
-                    energy_mask_drive = (
-                        energy_df['distance_diffs'].abs() > DISTANCE_UNCERTAINTY
-                    ) & energy_df['driving_energy_diffs'].notna()
-
-                    if energy_mask_drive.sum() > 0:
-                        axs[5].plot(
-                            energy_df.loc[energy_mask_drive, 'time_elapsed'],
-                            energy_df.loc[energy_mask_drive, 'driving_energy_diffs'],
-                            linewidth=2,
-                            color='darkred'
-                        )
-                    # Set y-limits to symmetric range around mean using ±5σ envelope
-                    if upper_thr_full is not None and lower_thr_full is not None and mean_diff is not None:
-                        max_abs = max(
-                            abs(raw_driving_diffs_full.max(skipna=True) - mean_diff),
-                            abs(raw_driving_diffs_full.min(skipna=True) - mean_diff),
-                            upper_thr_full - mean_diff,
-                            mean_diff - lower_thr_full
-                        )
-                        pad = 0.1 * max_abs if max_abs > 0 else 0.1
-                        axs[5].set_ylim(mean_diff - max_abs - pad, mean_diff + max_abs + pad)
-                    axs[5].set_ylabel('Driving energy delta (kWh/step)', fontsize=16)
-                    axs[5].grid(True, alpha=0.3)
-                    axs[5].tick_params(axis='both', which='major', labelsize=12)
-                    # Set x-axis limits to span full original drive cycle period
-                    if 'saia' in name.lower() and background_available:
-                        axs[5].set_xlim(bg_time.min(), bg_time.max())
-
-                    # Panel 6: Instantaneous energy economy vs time (Saia limited to elevation-valid region)
-                    # First, compute instantaneous energy for FULL event (for raw data across full period)
-                    # Use data_df_event_full (original full event before elevation trimming)
-                    regen_energy_col_full = get_column_name(energy_df_full_orig, ['energy_regen_kwh', 'accumumlatedkwh'])
-                    if regen_energy_col_full is None:
-                        regen_energy_col_full = driving_energy_col_full
-                    
-                    # Raw instantaneous energy for full event (no smoothing)
-                    raw_regen_diffs_full = energy_df_full_orig[regen_energy_col_full].diff()
-                    raw_regen_diffs_full = raw_regen_diffs_full.where(raw_regen_diffs_full >= 0, np.nan)
-                    raw_inst_energy_full = (raw_driving_diffs_full - raw_regen_diffs_full) / energy_df_full_orig['distance_diffs_full']
-                    energy_mask_inst_raw_full = (
-                        energy_df_full_orig['distance_diffs_full'].abs() > DISTANCE_UNCERTAINTY
-                    ) & raw_inst_energy_full.notna()
-                    
-                    # Plot raw instantaneous energy (odometer distance) across full period
-                    if energy_mask_inst_raw_full.sum() > 0:
-                        raw_vals = raw_inst_energy_full.loc[energy_mask_inst_raw_full]
-                        print(f"DEBUG Drive cycle {driving_event} - Raw inst energy:")
-                        print(f"  Distance diffs (raw odometer) - min: {energy_df_full_orig.loc[energy_mask_inst_raw_full, 'distance_diffs_full'].min():.6f}, max: {energy_df_full_orig.loc[energy_mask_inst_raw_full, 'distance_diffs_full'].max():.6f}, mean: {energy_df_full_orig.loc[energy_mask_inst_raw_full, 'distance_diffs_full'].mean():.6f}")
-                        print(f"  Raw inst energy values - min: {raw_vals.min(skipna=True):.4f}, max: {raw_vals.max(skipna=True):.4f}, mean: {raw_vals.mean(skipna=True):.4f}, count: {raw_vals.count()}")
-                        
-                        axs[6].plot(
-                            energy_df_full_orig.loc[energy_mask_inst_raw_full, 'time_elapsed'],
-                            raw_inst_energy_full.loc[energy_mask_inst_raw_full],
-                            linewidth=1.5,
-                            color='mediumpurple',
-                            alpha=0.5,
-                            label='Raw (odometer distance)',
-                        )
-                    
-                    # Now compute for elevation-valid region using cleaned driving energy
-                    # Regen deltas from raw energy; drop resets so only actual recovery remains
-                    regen_diff_raw = energy_df[regen_energy_col].diff()
-                    energy_df['regen_energy_diffs'] = regen_diff_raw.where(regen_diff_raw >= 0, np.nan)
-                    
-                    # If regen column is sparse/missing, fill NaN with 0 (no regen during those periods)
-                    # This allows inst_energy calculation to proceed using driving energy only
-                    energy_df['regen_energy_diffs'] = energy_df['regen_energy_diffs'].fillna(0.0)
-                    
-                    # DEBUG: Check if regen column has issues
-                    if regen_energy_col == driving_energy_col:
-                        print(f"    WARNING Drive cycle {driving_event}: No separate regen column found, using {driving_energy_col} for both")
 
                     # Distance deltas for instantaneous energy using smoothed speed
                     distance_diffs_inst = energy_df['distance_diffs'].copy()
@@ -1824,17 +1835,21 @@ def analyze_drive_cycles(top_dir, names):
                         distance_diffs_inst = energy_df['speed_smooth'] * dt_seconds / 3600.0  # miles
                     energy_df['distance_diffs_inst'] = distance_diffs_inst
 
-                    # Distance deltas and instantaneous net energy (cleaned driving - regen) per mile using smoothed speed distances
-                    energy_df['inst_energy_per_mile'] = (
-                        energy_df['driving_energy_diffs'] - energy_df['regen_energy_diffs']
-                    ) / energy_df['distance_diffs_inst']
+                    # Instantaneous energy = -delta_battery_energy / distance (negative because discharging is positive energy)
+                    # Use cleaned battery energy deltas (with outliers removed and interpolated)
+                    if battery_energy_delta_clean is not None:
+                        energy_df['inst_energy_per_mile'] = (
+                            -battery_energy_delta_clean / distance_diffs_inst
+                        )
+                    else:
+                        energy_df['inst_energy_per_mile'] = np.nan
 
                     energy_mask = (
                         energy_df['distance_diffs_inst'].abs() > DISTANCE_UNCERTAINTY
                     ) & energy_df['inst_energy_per_mile'].notna()
                     
                     # Diagnostic: identify periods where inst energy is undefined
-                    missing_inst_energy = ~energy_mask & energy_df['driving_energy_diffs'].notna()
+                    missing_inst_energy = ~energy_mask & (battery_energy_delta_clean.notna() if battery_energy_delta_clean is not None else False)
                     if missing_inst_energy.sum() > 0:
                         try:
                             pct_missing = (missing_inst_energy.sum() / len(energy_df)) * 100
@@ -1843,27 +1858,10 @@ def analyze_drive_cycles(top_dir, names):
                             missing_times = energy_df.loc[missing_inst_energy, 'time_elapsed']
                             if len(missing_times) > 0:
                                 print(f"      Missing inst energy at times: {missing_times.min():.1f}-{missing_times.max():.1f} min")
-                            
-                            # Detailed diagnostic for missing periods - check all components
-                            missing_driving = energy_df.loc[missing_inst_energy, 'driving_energy_diffs']
-                            missing_regen = energy_df.loc[missing_inst_energy, 'regen_energy_diffs']
-                            missing_regen_raw = regen_diff_raw.loc[missing_inst_energy]
-                            missing_regen_abs = energy_df.loc[missing_inst_energy, regen_energy_col]
-                            missing_dists = energy_df.loc[missing_inst_energy, 'distance_diffs_inst']
-                            missing_inst = energy_df.loc[missing_inst_energy, 'inst_energy_per_mile']
-                            
-                            print(f"      Driving energy (kWh): defined={missing_driving.notna().sum()}/{len(missing_driving)}, range=[{missing_driving.min():.3f}, {missing_driving.max():.3f}]")
-                            print(f"      Regen energy raw diff: defined={missing_regen_raw.notna().sum()}/{len(missing_regen_raw)}, negative={(missing_regen_raw < 0).sum()}, range=[{missing_regen_raw.min():.3f}, {missing_regen_raw.max():.3f}]")
-                            print(f"      Regen energy absolute values: defined={missing_regen_abs.notna().sum()}/{len(missing_regen_abs)}, range=[{missing_regen_abs.min():.3f}, {missing_regen_abs.max():.3f}]")
-                            print(f"      Regen energy (filtered): defined={missing_regen.notna().sum()}/{len(missing_regen)}")
-                            print(f"      Distance diffs (mi): defined={missing_dists.notna().sum()}/{len(missing_dists)}, range=[{missing_dists.min():.6f}, {missing_dists.max():.6f}]")
-                            print(f"      Inst energy (kWh/mi): defined={missing_inst.notna().sum()}/{len(missing_inst)}")
-                            print(f"      Distance < {DISTANCE_UNCERTAINTY} mi: {(missing_dists.abs() <= DISTANCE_UNCERTAINTY).sum()}/{len(missing_dists)}")
                         except Exception as e:
                             print(f"      ERROR in diagnostics: {e}")
                     
                     # Restrict ALL visualizations to periods where inst energy is well-defined
-                    # This ensures consistency across speed/elevation/grade/energy panels
                     energy_df_valid = energy_df.loc[energy_mask].copy()
                     
                     if energy_mask.sum() > 0:
@@ -1872,37 +1870,25 @@ def analyze_drive_cycles(top_dir, names):
                         print(f"      Distance diffs (smoothed speed) - min: {energy_df_valid['distance_diffs_inst'].min():.6f}, max: {energy_df_valid['distance_diffs_inst'].max():.6f}, mean: {energy_df_valid['distance_diffs_inst'].mean():.6f}")
                         print(f"      Final inst energy values - min: {final_vals.min(skipna=True):.4f}, max: {final_vals.max(skipna=True):.4f}, mean: {final_vals.mean(skipna=True):.4f}, count: {final_vals.count()}")
                         
-                        axs[6].plot(
+                        axs[5].plot(
                             energy_df_valid['time_elapsed'],
                             energy_df_valid['inst_energy_per_mile'],
                             linewidth=2,
                             color='purple',
-                            label='Final (smoothed-speed distance)'
+                            label='Instantaneous energy'
                         )
-                        # Set y-limits: use BOTH raw and final ranges, but exclude extreme outliers in raw trace
-                        # This shows the difference while keeping axis reasonable
+                        # Set y-limits for readability
                         y_min_inst = energy_df_valid['inst_energy_per_mile'].min(skipna=True)
                         y_max_inst = energy_df_valid['inst_energy_per_mile'].max(skipna=True)
-                        
-                        # For raw trace: use 99th percentile to exclude extreme single-point spikes but still show real differences
-                        if energy_mask_inst_raw_full.sum() > 0:
-                            raw_vals_all = raw_inst_energy_full.loc[energy_mask_inst_raw_full]
-                            y_min_raw = raw_vals_all.quantile(0.01)  # 1st percentile
-                            y_max_raw = raw_vals_all.quantile(0.99)  # 99th percentile
-                        else:
-                            y_min_raw = np.nan
-                            y_max_raw = np.nan
-                        
-                        combined_min = np.nanmin([y_min_inst, y_min_raw])
-                        combined_max = np.nanmax([y_max_inst, y_max_raw])
-                        pad_inst = 0.1 * (combined_max - combined_min) if (combined_max - combined_min) > 0 else 0.1
-                        axs[6].set_ylim(combined_min - pad_inst, combined_max + pad_inst)
-                    axs[6].set_ylabel('Inst. energy (kWh/mile)', fontsize=16)
-                    axs[6].set_xlabel('Drive time (minutes)', fontsize=16)
-                    axs[6].grid(True, alpha=0.3)
-                    axs[6].tick_params(axis='both', which='major', labelsize=12)
+                        pad_inst = 0.1 * (y_max_inst - y_min_inst) if (y_max_inst - y_min_inst) > 0 else 0.1
+                        axs[5].set_ylim(y_min_inst - pad_inst, y_max_inst + pad_inst)
+                    
+                    axs[5].set_ylabel('Inst. energy (kWh/mile)', fontsize=16)
+                    axs[5].set_xlabel('Drive time (minutes)', fontsize=16)
+                    axs[5].grid(True, alpha=0.3)
+                    axs[5].tick_params(axis='both', which='major', labelsize=12)
                     if background_available:
-                        axs[6].set_xlim(bg_time.min(), bg_time.max())
+                        axs[5].set_xlim(bg_time.min(), bg_time.max())
                     
                     # Add title
                     fig.suptitle(f"{name.replace('_', ' ').capitalize()}: Drive Cycle {driving_event} - Speed, Elevation, and Grade", 
@@ -1913,9 +1899,85 @@ def analyze_drive_cycles(top_dir, names):
                     if not FAST_MODE:
                         plt.savefig(f'{plot_dir}/{name}_drive_cycle_{driving_event}_elevation_grade.pdf')
                     plt.close()
+                    
+                    # Collect DoD summary for messy_middle_results
+                    dod_summary_rows.append({
+                        'Driving event': int(driving_event),
+                        'Initial SoC (%)': battery_charge_init,
+                        'Final SoC (%)': battery_charge_final,
+                        'Depth of Discharge (%)': dod,
+                    })
+                    
+                    # Collect detailed drive cycle data for messy_middle_results
+                    if DATASET_TYPE == 'messy_middle':
+                        # Build detailed CSV with final selected time periods
+                        # Need to get road_grade from the elevation dataframe that corresponds to energy_df_valid indices
+                        try:
+                            grade_values = data_df_event_with_elevation_core.loc[energy_df_valid.index, 'road_grade_percent'].values
+                        except:
+                            grade_values = np.full(len(energy_df_valid), np.nan)
+                        
+                        try:
+                            payload_values = data_df_event_with_elevation_core.loc[energy_df_valid.index, 'weight_kg'].values
+                        except:
+                            payload_values = np.full(len(energy_df_valid), np.nan)
+                        
+                        try:
+                            soc_values = energy_df_valid[soc_col].values if soc_col and soc_col in energy_df_valid.columns else np.full(len(energy_df_valid), np.nan)
+                        except:
+                            soc_values = np.full(len(energy_df_valid), np.nan)
+                        
+                        try:
+                            delta_battery_values = battery_energy_delta_clean.loc[energy_df_valid.index].values if battery_energy_delta_clean is not None else np.full(len(energy_df_valid), np.nan)
+                        except:
+                            delta_battery_values = np.full(len(energy_df_valid), np.nan)
+                        
+                        detailed_data = pd.DataFrame({
+                            'Time (s)': (energy_df_valid['time_elapsed'] * 60).values,  # Convert minutes to seconds
+                            'Speed (km/h)': (energy_df_valid['speed'] * 1.60934).values,  # Convert mph to km/h
+                            'Road Grade (%)': grade_values,
+                            'Payload (kg)': payload_values,
+                            'State of Charge (%)': soc_values,
+                            'Delta Battery Energy (kWh)': delta_battery_values,
+                            'Instantaneous Energy (kWh/mile)': energy_df_valid['inst_energy_per_mile'].values,
+                        })
+                        detailed_drivecycle_dict[f'event_{driving_event}'] = detailed_data
 
         drivecycle_data_df['Driving event'] = drivecycle_data_df['Driving event'].astype('int')
         drivecycle_data_df.to_csv(f'{table_dir}/{name}_drivecycle_data.csv', index=False)
+        # Write per-event totals CSV for this dataset
+        try:
+            if len(energy_totals_rows) > 0:
+                energy_totals_df = pd.DataFrame(energy_totals_rows)
+                energy_totals_df.to_csv(f'{table_dir}/{name}_drivecycle_energy_totals.csv', index=False)
+                print(f"  ✓ Saved per-event energy totals for {name}")
+            else:
+                print(f"  ⚠ No per-event energy totals to save for {name}")
+        except Exception as e:
+            print(f"  WARNING: Failed to write energy totals CSV for {name}: {e}")
+        
+        # Save messy_middle_results outputs
+        if DATASET_TYPE == 'messy_middle':
+            messy_results_dir = f'{top_dir}/messy_middle_results'
+            os.makedirs(messy_results_dir, exist_ok=True)
+            
+            # Save DoD summary
+            if len(dod_summary_rows) > 0:
+                dod_summary_df = pd.DataFrame(dod_summary_rows)
+                dod_summary_df.to_csv(f'{messy_results_dir}/{name}_dod_summary.csv', index=False)
+                print(f"  ✓ Saved DoD summary to messy_middle_results/{name}_dod_summary.csv")
+            
+            # Save detailed drive cycle CSVs
+            for event_key, event_data in detailed_drivecycle_dict.items():
+                event_num = event_key.split('_')[1]
+                event_data.to_csv(f'{messy_results_dir}/{name}_drivecycle_{event_num}_detailed.csv', index=False)
+            if len(detailed_drivecycle_dict) > 0:
+                print(f"  ✓ Saved {len(detailed_drivecycle_dict)} detailed drive cycle CSVs to messy_middle_results/")
+            
+            # Save drivecycle_data summary (using final selected periods)
+            drivecycle_data_df.to_csv(f'{messy_results_dir}/{name}_drivecycle_data.csv', index=False)
+            print(f"  ✓ Saved drivecycle data summary to messy_middle_results/{name}_drivecycle_data.csv")
+        
         print(f"  ✓ Saved drive cycle analysis for {name}")
     
     # Plot range and fuel economy summaries
@@ -2225,11 +2287,11 @@ def main():
     
     # ======== UNCOMMENT/COMMENT SECTIONS TO RUN ========
     
-    # # Stage 1: Data Preprocessing
-    # preprocess_data(top_dir, files, names)
+    # Stage 1: Data Preprocessing
+    preprocess_data(top_dir, files, names)
     
-    # # Stage 1.5: Elevation and Road Grade Analysis
-    # analyze_elevation_grade(top_dir, names)
+    # Stage 1.5: Elevation and Road Grade Analysis
+    analyze_elevation_grade(top_dir, names)
     
     # # Stage 2: Charging Analysis
     # analyze_charging_power(top_dir, names)
@@ -2237,17 +2299,17 @@ def main():
     # # Stage 3: Energy Analysis
     # analyze_instantaneous_energy(top_dir, names)
     
-    # # Stage 4: Prepare Driving/Charging Events
-    # prepare_driving_charging_data(top_dir, names)
+    # Stage 4: Prepare Driving/Charging Events
+    prepare_driving_charging_data(top_dir, names)
     
     # Stage 5: Battery Capacity Analysis
     analyze_battery_capacity(top_dir, names)
     
-    # # Stage 6: Charging Time & DoD
-    # analyze_charging_time_dod(top_dir, names)
+    # Stage 6: Charging Time & DoD
+    analyze_charging_time_dod(top_dir, names)
     
-    # # Stage 7: Drive Cycles
-    # analyze_drive_cycles(top_dir, names)
+    # Stage 7: Drive Cycles
+    analyze_drive_cycles(top_dir, names)
     
     # # Stage 8: VMT Analysis
     # analyze_vmt(top_dir, names)
