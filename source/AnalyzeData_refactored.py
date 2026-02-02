@@ -1920,7 +1920,7 @@ def analyze_drive_cycles(top_dir, names):
                         # Build detailed CSV with final selected time periods
                         # Need to get road_grade from the elevation dataframe that corresponds to energy_df_valid indices
                         try:
-                            grade_values = data_df_event_with_elevation_core.loc[energy_df_valid.index, 'road_grade_percent'].values
+                            grade_values = data_df_event_with_elevation_core.loc[energy_df_valid.index, 'road_grade_percent'].values  # Using smoothed grade
                         except:
                             grade_values = np.full(len(energy_df_valid), np.nan)
                         
@@ -1939,14 +1939,29 @@ def analyze_drive_cycles(top_dir, names):
                         except:
                             delta_battery_values = np.full(len(energy_df_valid), np.nan)
                         
+                        # Use smoothed elevation if available, otherwise fall back to raw
+                        try:
+                            if 'elevation_smooth' in data_df_event_with_elevation_core.columns:
+                                elevation_values = data_df_event_with_elevation_core.loc[energy_df_valid.index, 'elevation_smooth'].values
+                            elif elevation_col and elevation_col in data_df_event_with_elevation_core.columns:
+                                elevation_values = data_df_event_with_elevation_core.loc[energy_df_valid.index, elevation_col].values
+                            else:
+                                elevation_values = np.full(len(energy_df_valid), np.nan)
+                        except:
+                            elevation_values = np.full(len(energy_df_valid), np.nan)
+                        
+                        # Use smoothed speed if available, otherwise fall back to raw
+                        speed_col_to_use = 'speed_smooth' if 'speed_smooth' in energy_df_valid.columns else 'speed'
+                        
                         detailed_data = pd.DataFrame({
                             'Time (s)': (energy_df_valid['time_elapsed'] * 60).values,  # Convert minutes to seconds
-                            'Speed (km/h)': (energy_df_valid['speed'] * 1.60934).values,  # Convert mph to km/h
-                            'Road Grade (%)': grade_values,
+                            'Speed (km/h)': (energy_df_valid[speed_col_to_use] * 1.60934).values,  # Convert mph to km/h (using smoothed)
+                            'Elevation (m)': elevation_values,  # Using smoothed elevation
+                            'Road Grade (%)': grade_values,  # Using smoothed grade
                             'Payload (kg)': payload_values,
                             'State of Charge (%)': soc_values,
-                            'Delta Battery Energy (kWh)': delta_battery_values,
-                            'Instantaneous Energy (kWh/mile)': energy_df_valid['inst_energy_per_mile'].values,
+                            'Delta Battery Energy (kWh)': delta_battery_values,  # Using cleaned/filtered values
+                            'Instantaneous Energy (kWh/mile)': energy_df_valid['inst_energy_per_mile'].values,  # Calculated from cleaned battery energy and smoothed speed; filtered for sufficient distance traveled
                         })
                         detailed_drivecycle_dict[f'event_{driving_event}'] = detailed_data
 
