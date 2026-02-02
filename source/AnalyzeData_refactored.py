@@ -1264,6 +1264,13 @@ def analyze_drive_cycles(top_dir, names):
             ):
                 continue
             
+            # Check for multiple payload values - skip if payload varies during event
+            if 'weight_kg' in data_df_event.columns:
+                unique_payloads = data_df_event['weight_kg'].dropna().unique()
+                if len(unique_payloads) > 1:
+                    print(f"  Skipping event {driving_event}: Multiple payload values detected ({len(unique_payloads)} unique values)")
+                    continue
+            
             # Trim to the largest continuous block with elevation data (all datasets)
             elevation_valid_mask = pd.Series(True, index=data_df_event.index)  # default: all valid
             elevation_col_trim = get_column_name(data_df_event, ['elevation_final_m', 'elevation_meters'])
@@ -2287,11 +2294,11 @@ def main():
     
     # ======== UNCOMMENT/COMMENT SECTIONS TO RUN ========
     
-    # Stage 1: Data Preprocessing
-    preprocess_data(top_dir, files, names)
+    # # Stage 1: Data Preprocessing
+    # preprocess_data(top_dir, files, names)
     
-    # Stage 1.5: Elevation and Road Grade Analysis
-    analyze_elevation_grade(top_dir, names)
+    # # Stage 1.5: Elevation and Road Grade Analysis
+    # analyze_elevation_grade(top_dir, names)
     
     # # Stage 2: Charging Analysis
     # analyze_charging_power(top_dir, names)
@@ -2299,14 +2306,14 @@ def main():
     # # Stage 3: Energy Analysis
     # analyze_instantaneous_energy(top_dir, names)
     
-    # Stage 4: Prepare Driving/Charging Events
-    prepare_driving_charging_data(top_dir, names)
+    # # Stage 4: Prepare Driving/Charging Events
+    # prepare_driving_charging_data(top_dir, names)
     
     # Stage 5: Battery Capacity Analysis
-    analyze_battery_capacity(top_dir, names)
+    # analyze_battery_capacity(top_dir, names)
     
-    # Stage 6: Charging Time & DoD
-    analyze_charging_time_dod(top_dir, names)
+    # # Stage 6: Charging Time & DoD
+    # analyze_charging_time_dod(top_dir, names)
     
     # Stage 7: Drive Cycles
     analyze_drive_cycles(top_dir, names)
