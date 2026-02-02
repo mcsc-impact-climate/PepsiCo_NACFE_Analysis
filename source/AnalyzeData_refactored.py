@@ -1264,11 +1264,11 @@ def analyze_drive_cycles(top_dir, names):
             ):
                 continue
             
-            # Check for multiple payload values - skip if payload varies during event
+            # Check for multiple gvw values - skip if gvw varies during event
             if 'weight_kg' in data_df_event.columns:
-                unique_payloads = data_df_event['weight_kg'].dropna().unique()
-                if len(unique_payloads) > 1:
-                    print(f"  Skipping event {driving_event}: Multiple payload values detected ({len(unique_payloads)} unique values)")
+                unique_gvws = data_df_event['weight_kg'].dropna().unique()
+                if len(unique_gvws) > 1:
+                    print(f"  Skipping event {driving_event}: Multiple gvw values detected ({len(unique_gvws)} unique values)")
                     continue
             
             # Trim to the largest continuous block with elevation data (all datasets)
@@ -1658,16 +1658,16 @@ def analyze_drive_cycles(top_dir, names):
                     if background_available:
                         axs[2].set_xlim(bg_time.min(), bg_time.max())
 
-                    # Panel 4: Payload (weight_kg) vs time
+                    # Panel 4: GVW (weight_kg) vs time
                     if 'saia' in name.lower():
                         data_df_event_with_elevation_core['weight_kg'] = 31000.0
                         data_df_event_core['weight_kg'] = 31000.0
-                    payload_mask = data_df_event_with_elevation_core['weight_kg'].notna()
-                    if payload_mask.sum() > 0:
-                        time_for_payload = data_df_event_core.loc[payload_mask, 'time_elapsed']
-                        payload_values = data_df_event_with_elevation_core.loc[payload_mask, 'weight_kg']
-                        axs[3].plot(time_for_payload, payload_values, linewidth=2, color='firebrick')
-                    axs[3].set_ylabel('Payload (kg)', fontsize=16)
+                    gvw_mask = data_df_event_with_elevation_core['weight_kg'].notna()
+                    if gvw_mask.sum() > 0:
+                        time_for_gvw = data_df_event_core.loc[gvw_mask, 'time_elapsed']
+                        gvw_values = data_df_event_with_elevation_core.loc[gvw_mask, 'weight_kg']
+                        axs[3].plot(time_for_gvw, gvw_values, linewidth=2, color='firebrick')
+                    axs[3].set_ylabel('GVW (kg)', fontsize=16)
                     axs[3].grid(True, alpha=0.3)
                     axs[3].tick_params(axis='both', which='major', labelsize=12)
                     if background_available:
@@ -1925,9 +1925,9 @@ def analyze_drive_cycles(top_dir, names):
                             grade_values = np.full(len(energy_df_valid), np.nan)
                         
                         try:
-                            payload_values = data_df_event_with_elevation_core.loc[energy_df_valid.index, 'weight_kg'].values
+                            gvw_values = data_df_event_with_elevation_core.loc[energy_df_valid.index, 'weight_kg'].values
                         except:
-                            payload_values = np.full(len(energy_df_valid), np.nan)
+                            gvw_values = np.full(len(energy_df_valid), np.nan)
                         
                         try:
                             soc_values = energy_df_valid[soc_col].values if soc_col and soc_col in energy_df_valid.columns else np.full(len(energy_df_valid), np.nan)
@@ -1958,7 +1958,7 @@ def analyze_drive_cycles(top_dir, names):
                             'Speed (km/h)': (energy_df_valid[speed_col_to_use] * 1.60934).values,  # Convert mph to km/h (using smoothed)
                             'Elevation (m)': elevation_values,  # Using smoothed elevation
                             'Road Grade (%)': grade_values,  # Using smoothed grade
-                            'Payload (kg)': payload_values,
+                            'GVW (kg)': gvw_values,
                             'State of Charge (%)': soc_values,
                             'Delta Battery Energy (kWh)': delta_battery_values,  # Using cleaned/filtered values
                             'Instantaneous Energy (kWh/mile)': energy_df_valid['inst_energy_per_mile'].values,  # Calculated from cleaned battery energy and smoothed speed; filtered for sufficient distance traveled
