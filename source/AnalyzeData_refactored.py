@@ -527,7 +527,7 @@ def analyze_elevation_grade(top_dir, names):
         grade_min = data_df['road_grade_percent'].min()
         grade_max = data_df['road_grade_percent'].max()
         
-        print(f"  ✓ Saved elevation and grade analysis for {name}")
+        print(f"  ✓ Saved elevation and grade analysis: {plot_dir}/{name}_elevation_grade_analysis.png")
         print(f"    Road Grade Statistics:")
         print(f"      Mean: {grade_mean:.2f}% ± {grade_std:.2f}%")
         print(f"      Range: {grade_min:.2f}% to {grade_max:.2f}%")
@@ -564,6 +564,9 @@ def analyze_charging_power(top_dir, names):
         
         data_charging_df['timestamp_diffs_hours'] = data_charging_df['timestamp_diffs_seconds'] / SECONDS_PER_HOUR
         data_charging_df['charging_power'] = data_charging_df['accumulatedkwh_diffs'] / data_charging_df['timestamp_diffs_hours']
+        
+        # Filter out negative charging powers
+        data_charging_df = data_charging_df[data_charging_df['charging_power'] > 0]
         charging_powers[name] = data_charging_df['charging_power']
 
         # Plot charging power vs time
@@ -574,7 +577,7 @@ def analyze_charging_power(top_dir, names):
         ax.tick_params(axis='both', which='major', labelsize=12)
         plt.savefig(f'{plot_dir}/{name}_chargingpower_vs_time.png')
         plt.close()
-        print(f"  ✓ Saved charging power plot for {name}")
+        print(f"  ✓ Saved charging power plot: {plot_dir}/{name}_chargingpower_vs_time.png")
    
     # Calculate statistics
     data = [charging_powers[name] for name in names]
@@ -583,6 +586,7 @@ def analyze_charging_power(top_dir, names):
     mins = [np.min(d) for d in data]
     upper_quantiles = [np.percentile(d, 75) for d in data]
     lower_quantiles = [np.percentile(d, 25) for d in data]
+    percentile_99 = [np.percentile(d, 99) for d in data]
 
     print("\nCharging Power Statistics:")
     for i, name in enumerate(names):
@@ -590,19 +594,41 @@ def analyze_charging_power(top_dir, names):
         print(f"  Mean: {means[i]:.1f} kW")
         print(f"  75% quantile: {upper_quantiles[i]:.1f} kW")
         print(f"  25% quantile: {lower_quantiles[i]:.1f} kW")
+        print(f"  99th percentile: {percentile_99[i]:.1f} kW")
 
     # Plot box plot
     fig, ax = plt.subplots(figsize=(10, 6))
     plt.boxplot(data)
     for i, mean in enumerate(means, start=1):
         plt.scatter(i, mean, color='red', marker='o', label='Mean' if i == 1 else "")
+    
+    # Plot 99th percentile as a bold red step line
+    x_positions = list(range(1, len(names) + 1))
+    for i in range(len(x_positions)):
+        # Draw horizontal line for each bin
+        x_left = x_positions[i] - 0.4
+        x_right = x_positions[i] + 0.4
+        plt.hlines(percentile_99[i], x_left, x_right, color='red', linewidth=3, 
+                  label='99th percentile (assumed maximum)' if i == 0 else "", zorder=10)
+    
     plt.xticks(range(1, len(names) + 1), [name.replace('_', ' ').capitalize() for name in names])
     plt.ylabel('Charging power (kW)', fontsize=18)
     ax.tick_params(axis='both', which='major', labelsize=16)
     plt.legend(fontsize=16)
     plt.savefig(f'{plot_dir}/chargingpower_stats.png')
     plt.close()
-    print(f"\n  ✓ Saved {DATASET_TYPE} charging power statistics plot")
+    print(f"\n  ✓ Saved {DATASET_TYPE} charging power statistics plot: {plot_dir}/chargingpower_stats.png")
+    
+    # Save 99th percentile values to CSV
+    if DATASET_TYPE == 'messy_middle':
+        results_dir = f'{top_dir}/messy_middle_results'
+        os.makedirs(results_dir, exist_ok=True)
+        max_power_df = pd.DataFrame({
+            'truck_name': names,
+            '99th_percentile_charging_power_kw': percentile_99
+        })
+        max_power_df.to_csv(f'{results_dir}/max_charging_powers.csv', index=False)
+        print(f"  ✓ Saved max charging powers to {results_dir}/max_charging_powers.csv")
 
 def analyze_instantaneous_energy(top_dir, names):
     """Analyze instantaneous energy consumption per mile."""
@@ -720,7 +746,7 @@ def analyze_instantaneous_energy(top_dir, names):
         if not FAST_MODE:
             plt.savefig(f'{plot_dir}/energy_by_speed_{name}_zoom.pdf')
         plt.close()
-        print(f"  ✓ Saved energy per distance plots for {name}")
+        print(f"  ✓ Saved energy per distance plots: {plot_dir}/energy_by_speed_{name}.png (and _zoom.png)")
     
     # Plot all trucks together
     # Generate color gradients dynamically based on number of datasets
@@ -747,7 +773,7 @@ def analyze_instantaneous_energy(top_dir, names):
     if not FAST_MODE:
         plt.savefig(f'{plot_dir}/energy_by_speed_all.pdf')
     plt.close()
-    print(f"  ✓ Saved {DATASET_TYPE} combined energy per distance plot")
+    print(f"  ✓ Saved {DATASET_TYPE} combined energy per distance plot: {plot_dir}/energy_by_speed_all.png")
 
 def prepare_driving_charging_data(top_dir, names):
     """Prepare data with driving and charging event labels."""
@@ -1035,7 +1061,7 @@ def analyze_battery_capacity(top_dir, names):
         plt.close()
         
         battery_capacities.append(weighted_mean_quadfit)
-        print(f"  ✓ Saved battery capacity analysis for {name}")
+        print(f"  ✓ Saved battery capacity analysis: {plot_dir}/{name}_battery_capacity_summary.png")
     
     # Save battery capacities
     battery_capacity_save = pd.DataFrame({'Value': ['Mean', 'Standard Deviation']})
@@ -1198,7 +1224,7 @@ def analyze_charging_time_dod(top_dir, names):
         if not FAST_MODE:
             plt.savefig(f'{plot_dir}/{name}_charging_summary.pdf')
         plt.close()
-        print(f"  ✓ Saved charging time analysis for {name}")
+        print(f"  ✓ Saved charging time analysis: {plot_dir}/{name}_charging_summary.png")
 
 def analyze_drive_cycles(top_dir, names):
     """Analyze individual drive cycles and extrapolated range/fuel economy."""
@@ -2000,7 +2026,7 @@ def analyze_drive_cycles(top_dir, names):
             drivecycle_data_df.to_csv(f'{messy_results_dir}/{name}_drivecycle_data.csv', index=False)
             print(f"  ✓ Saved drivecycle data summary to messy_middle_results/{name}_drivecycle_data.csv")
         
-        print(f"  ✓ Saved drive cycle analysis for {name}")
+        print(f"  ✓ Saved drive cycle analysis plots to: {plot_dir}/{name}_drive_cycle_*.png")
     
     # Plot range and fuel economy summaries
     for name in names:
@@ -2231,7 +2257,7 @@ def analyze_vmt(top_dir, names):
         
         vmt_data_df.to_csv(f'{table_dir}/{name}_vmt_data.csv', 
                           header=['Distance traveled (miles)', 'Total time (days)', 'Extrapolated Annual VMT (miles/year)'], index=False)
-        print(f"  ✓ Saved VMT analysis for {name}")
+        print(f"  ✓ Saved VMT analysis plots to: {plot_dir}/{name}_speed_vs_time.png and {top_dir}/plots/{name}_distance_vs_time.png")
 
 def analyze_energy_delivered(top_dir, names):
     """Analyze and extrapolate energy delivered per month."""
@@ -2289,7 +2315,7 @@ def analyze_energy_delivered(top_dir, names):
         
         energy_data_df.to_csv(f'{table_dir}/{name}_energy_per_month_data.csv', 
                              header=['Energy Delivered (kWh)', 'Total time (days)', 'Extrapolated Energy/Month (kWh/month)'], index=False)
-        print(f"  ✓ Saved energy delivered analysis for {name}")
+        print(f"  ✓ Saved energy delivered analysis: {plot_dir}/{name}_charging_energy_vs_time.png")
 
 # ============================================================================
 # MAIN ROUTINE
@@ -2315,8 +2341,8 @@ def main():
     # # Stage 1.5: Elevation and Road Grade Analysis
     # analyze_elevation_grade(top_dir, names)
     
-    # # Stage 2: Charging Analysis
-    # analyze_charging_power(top_dir, names)
+    # Stage 2: Charging Analysis
+    analyze_charging_power(top_dir, names)
     
     # # Stage 3: Energy Analysis
     # analyze_instantaneous_energy(top_dir, names)
@@ -2330,8 +2356,8 @@ def main():
     # # Stage 6: Charging Time & DoD
     # analyze_charging_time_dod(top_dir, names)
     
-    # Stage 7: Drive Cycles
-    analyze_drive_cycles(top_dir, names)
+    # # Stage 7: Drive Cycles
+    # analyze_drive_cycles(top_dir, names)
     
     # # Stage 8: VMT Analysis
     # analyze_vmt(top_dir, names)
