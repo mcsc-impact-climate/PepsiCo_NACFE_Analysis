@@ -30,7 +30,7 @@ pip install -r requirements.txt
 
 ## Execute the analysis code
 ```bash
-python source/AnalyzeData.py
+python source/AnalyzeData_refactored.py
 ```
 
-Plots and tables produced by the analysis code should now be available in the `tables` and `plots` directories.
+Plots and tables produced by the analysis code should now be available in the `tables_messy`, `plots_messy`, and `messy_middle_results` directories.
