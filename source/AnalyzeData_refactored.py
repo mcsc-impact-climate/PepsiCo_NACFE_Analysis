@@ -1930,15 +1930,15 @@ def analyze_drive_cycles(top_dir, names):
                         axs[5].set_ylim(y_min_inst - pad_inst, y_max_inst + pad_inst)
                     
                     axs[5].set_ylabel('Inst. energy (kWh/mile)', fontsize=16)
-                    axs[5].set_xlabel('Drive time (minutes)', fontsize=16)
+                    axs[5].set_xlabel('Drive time (minutes)', fontsize=20)
                     axs[5].grid(True, alpha=0.3)
                     axs[5].tick_params(axis='both', which='major', labelsize=12)
                     if background_available:
                         axs[5].set_xlim(bg_time.min(), bg_time.max())
                     
                     # Add title
-                    fig.suptitle(f"{name.replace('_', ' ').capitalize()}: Drive Cycle {driving_event} - Speed, Elevation, and Grade", 
-                                fontsize=16, fontweight='bold')
+                    fig.suptitle(f"{name.replace('_', ' ').capitalize()}: Drive Cycle {driving_event}", 
+                                fontsize=22, fontweight='bold', y=0.995)
                     
                     plt.tight_layout()
                     plt.savefig(f'{plot_dir}/{name}_drive_cycle_{driving_event}_elevation_grade.png', dpi=300)
@@ -2372,8 +2372,8 @@ def main():
     # # Stage 1.5: Elevation and Road Grade Analysis
     # analyze_elevation_grade(top_dir, names)
     
-    # Stage 2: Charging Analysis
-    analyze_charging_power(top_dir, names)
+    # # Stage 2: Charging Analysis
+    # analyze_charging_power(top_dir, names)
     
     # # Stage 3: Energy Analysis
     # analyze_instantaneous_energy(top_dir, names)
@@ -2387,8 +2387,8 @@ def main():
     # # Stage 6: Charging Time & DoD
     # analyze_charging_time_dod(top_dir, names)
     
-    # # Stage 7: Drive Cycles
-    # analyze_drive_cycles(top_dir, names)
+    # Stage 7: Drive Cycles
+    analyze_drive_cycles(top_dir, names)
     
     # # Stage 8: VMT Analysis
     # analyze_vmt(top_dir, names)
