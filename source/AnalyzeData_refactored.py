@@ -118,6 +118,10 @@ def get_output_dir(top_dir, subdir):
     if DATASET_TYPE == 'pepsi':
         return f'{top_dir}/{subdir}'
     else:  # messy_middle
+        # If the subdir already has the messy suffix, return it as-is
+        if 'messy' in subdir:
+            return f'{top_dir}/{subdir}'
+        # Otherwise, map the standard names to messy versions
         if subdir == 'tables':
             return f'{top_dir}/tables_messy'
         elif subdir == 'plots':
@@ -611,11 +615,20 @@ def analyze_charging_power(top_dir, names):
         plt.hlines(percentile_99[i], x_left, x_right, color='red', linewidth=3, 
                   label='99th percentile (assumed maximum)' if i == 0 else "", zorder=10)
     
-    plt.xticks(range(1, len(names) + 1), [name.replace('_', ' ').capitalize() for name in names])
-    plt.ylabel('Charging power (kW)', fontsize=18)
-    ax.tick_params(axis='both', which='major', labelsize=16)
-    plt.legend(fontsize=16)
-    plt.savefig(f'{plot_dir}/chargingpower_stats.png')
+    # Custom label mapping for x-axis
+    label_map = {
+        'nevoya_with_weight': 'Nevoya',
+        '4gen': '4Gen',
+        'joyride': 'Joyride',
+        'saia1': 'Saia1',
+        'saia2': 'Saia2'
+    }
+    x_labels = [label_map.get(name, name.replace('_', ' ').capitalize()) for name in names]
+    plt.xticks(range(1, len(names) + 1), x_labels, fontsize=18)
+    plt.ylabel('Charging power (kW)', fontsize=22)
+    ax.tick_params(axis='both', which='major', labelsize=18)
+    plt.legend(fontsize=18)
+    plt.savefig(f'{plot_dir}/chargingpower_stats.png', dpi=300)
     plt.close()
     print(f"\n  ✓ Saved {DATASET_TYPE} charging power statistics plot: {plot_dir}/chargingpower_stats.png")
     
@@ -968,7 +981,7 @@ def analyze_battery_capacity(top_dir, names):
             ax.tick_params(axis='both', which='major', labelsize=20)
             ax.scatter(data_df_event['socpercent'], data_df_event['accumumlatedkwh'], s=50, color='black')
             
-            best_fit_line = rf"Best-fit Line \ny = mx + b \nm={slope:.3f}$\pm${slope_unc:.3f}\nRMSE: {rmse:.2f}"
+            best_fit_line = "Best-fit Line"
             ax.text(0.33, 0.25, rf'Extrapolated Battery Size: {battery_size:.1f}$\pm${battery_size_unc:.1f} kWh', 
                    transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=20)
             
@@ -1026,29 +1039,29 @@ def analyze_battery_capacity(top_dir, names):
             print(f"  ⚠ No valid charging events found for {name}, skipping battery capacity analysis")
             continue
         
-        # Calculate weighted averages
-        battery_data_quadfit_df = pd.read_csv(f'{table_dir}/{name}_battery_data_quadfit.csv')
-        weighted_mean_quadfit = np.average(battery_data_quadfit_df['battery_size'], 
-                                          weights=1./battery_data_quadfit_df['battery_size_unc']**2)
-        weighted_std_quadfit = np.sqrt(np.average((battery_data_quadfit_df['battery_size']-weighted_mean_quadfit)**2, 
-                                                  weights=1./battery_data_quadfit_df['battery_size_unc']**2))
+        # Calculate weighted averages using linear fits
+        battery_data_linearfit_df = pd.read_csv(f'{table_dir}/{name}_battery_data_linearfit.csv')
+        weighted_mean_linearfit = np.average(battery_data_linearfit_df['battery_size'], 
+                                          weights=1./battery_data_linearfit_df['battery_size_unc']**2)
+        weighted_std_linearfit = np.sqrt(np.average((battery_data_linearfit_df['battery_size']-weighted_mean_linearfit)**2, 
+                                                  weights=1./battery_data_linearfit_df['battery_size_unc']**2))
         
         # Plot battery capacity summary
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.set_xlabel('Charging Event', fontsize=24)
         ax.set_ylabel('Battery Capacity (kWh)', fontsize=24)
         ax.tick_params(axis='both', which='major', labelsize=20)
-        plt.xticks(range(len(battery_data_quadfit_df['charging_event'])), 
-                  labels=battery_data_quadfit_df['charging_event'].astype(int))
+        plt.xticks(range(len(battery_data_linearfit_df['charging_event'])), 
+                  labels=battery_data_linearfit_df['charging_event'].astype(int))
         
-        plt.errorbar(range(len(battery_data_quadfit_df['charging_event'])), battery_data_quadfit_df['battery_size'], 
-                    yerr=battery_data_quadfit_df['battery_size_unc'], capsize=5, marker='o', linestyle='none', 
+        plt.errorbar(range(len(battery_data_linearfit_df['charging_event'])), battery_data_linearfit_df['battery_size'], 
+                    yerr=battery_data_linearfit_df['battery_size_unc'], capsize=5, marker='o', linestyle='none', 
                     color='black', label='Extrapolated capacity')
         xmin, xmax = ax.get_xlim()
-        ax.axhline(weighted_mean_quadfit, color='blue', linewidth=2, 
-                  label=rf'Weighted mean: {weighted_mean_quadfit:.1f}$\pm${weighted_std_quadfit:.1f}')
-        ax.fill_between(np.linspace(xmin, xmax, 100), weighted_mean_quadfit-weighted_std_quadfit, 
-                       weighted_mean_quadfit+weighted_std_quadfit, color='blue', alpha=0.2, edgecolor='none')
+        ax.axhline(weighted_mean_linearfit, color='blue', linewidth=2, 
+                  label=rf'Weighted mean: {weighted_mean_linearfit:.1f}$\pm${weighted_std_linearfit:.1f}')
+        ax.fill_between(np.linspace(xmin, xmax, 100), weighted_mean_linearfit-weighted_std_linearfit, 
+                       weighted_mean_linearfit+weighted_std_linearfit, color='blue', alpha=0.2, edgecolor='none')
         
         ymin, ymax = ax.get_ylim()
         ax.set_ylim(ymin, ymax + (ymax-ymin)*0.4)
@@ -1060,7 +1073,7 @@ def analyze_battery_capacity(top_dir, names):
             plt.savefig(f'{plot_dir}/{name}_battery_capacity_summary.pdf')
         plt.close()
         
-        battery_capacities.append(weighted_mean_quadfit)
+        battery_capacities.append(weighted_mean_linearfit)
         print(f"  ✓ Saved battery capacity analysis: {plot_dir}/{name}_battery_capacity_summary.png")
     
     # Save battery capacities
@@ -2096,9 +2109,19 @@ def analyze_vmt(top_dir, names):
         print("(Skipping analysis - NO_PLOT_MODE is enabled)")
         return
     
-    output_dir = get_output_dir(top_dir, 'data')
-    plot_dir = get_output_dir(top_dir, 'plots')
-    table_dir = get_output_dir(top_dir, 'tables')
+    # Determine correct output directories based on dataset type
+    if DATASET_TYPE == 'pepsi':
+        data_dir = 'data'
+        plot_dir_name = 'plots'
+        table_dir_name = 'tables'
+    else:  # messy_middle
+        data_dir = 'data_messy_middle'
+        plot_dir_name = 'plots_messy'
+        table_dir_name = 'tables_messy'
+    
+    output_dir = get_output_dir(top_dir, data_dir)
+    plot_dir = get_output_dir(top_dir, plot_dir_name)
+    table_dir = get_output_dir(top_dir, table_dir_name)
     
     for name in names:
         print(f"Processing {name}...")
@@ -2152,7 +2175,7 @@ def analyze_vmt(top_dir, names):
         data_df['charging_unselected_timestamp'] = data_df['timestamp_hours'].where(cChargingUnselected, np.nan)
         
         ymin, ymax = axs[0].get_ylim()
-        axs[0].fill_between(data_df['charging_unselected_timestamp'], ymin, ymax, color='green', alpha=0.1, edgecolor='none')
+        axs[0].fill_between(data_df['charging_unselected_timestamp'], ymin, ymax, color='green', alpha=0.1, edgecolor='none', label='Charging (unselected)')
         axs[0].set_ylim(ymin, ymax)
         
         ymin, ymax = axs[1].get_ylim()
@@ -2176,7 +2199,7 @@ def analyze_vmt(top_dir, names):
         data_df['driving_unselected_timestamp'] = data_df['timestamp_hours'].where(cDrivingUnselected, np.nan)
         
         ymin, ymax = axs[0].get_ylim()
-        axs[0].fill_between(data_df['driving_unselected_timestamp'], ymin, ymax, color='purple', alpha=0.1, edgecolor='none')
+        axs[0].fill_between(data_df['driving_unselected_timestamp'], ymin, ymax, color='purple', alpha=0.1, edgecolor='none', label='Driving (unselected)')
         axs[0].set_ylim(ymin, ymax)
         
         ymin, ymax = axs[1].get_ylim()
@@ -2215,17 +2238,15 @@ def analyze_vmt(top_dir, names):
         n_driving_total = data_df[data_df['activity'] == 'driving']['driving_event'].nunique()
         n_driving_selected = len(driving_selected)
         
-        info_text = f'Charging Events: {n_charging_selected}/{n_charging_total} selected\n'
-        info_text += f'Driving Events: {n_driving_selected}/{n_driving_total} selected'
-        
-        axs[0].text(0.02, 0.98, info_text, transform=axs[0].transAxes, fontsize=14,
-                   verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-        
-        axs[1].legend(fontsize=22, bbox_to_anchor=(1.0, 0.5))
+        # Combine legends from both axes and position above the plots
+        lines0, labels0 = axs[0].get_legend_handles_labels()
+        lines1, labels1 = axs[1].get_legend_handles_labels()
+        fig.legend(lines0 + lines1, labels0 + labels1, fontsize=16, loc='upper center', 
+                  bbox_to_anchor=(0.5, 1.12), ncol=2, frameon=True, fancybox=True, shadow=False)
         plt.tight_layout()
-        plt.savefig(f'{plot_dir}/{name}_speed_vs_time.png', dpi=300)
+        plt.savefig(f'{plot_dir}/{name}_speed_vs_time.png', dpi=300, bbox_inches='tight')
         if not FAST_MODE:
-            plt.savefig(f'{plot_dir}/{name}_speed_vs_time.pdf')
+            plt.savefig(f'{plot_dir}/{name}_speed_vs_time.pdf', bbox_inches='tight')
         plt.close()
         
         # Plot accumulated distance vs time
@@ -2250,14 +2271,14 @@ def analyze_vmt(top_dir, names):
                 transform=plt.gcf().transFigure, bbox=dict(facecolor='white', edgecolor='lightgray', alpha=0.7), fontsize=16)
         
         plt.tight_layout()
-        plt.savefig(f'{top_dir}/plots/{name}_distance_vs_time.png')
+        plt.savefig(f'{plot_dir}/{name}_distance_vs_time.png')
         if not FAST_MODE:
-            plt.savefig(f'{top_dir}/plots/{name}_distance_vs_time.pdf')
+            plt.savefig(f'{plot_dir}/{name}_distance_vs_time.pdf')
         plt.close()
         
         vmt_data_df.to_csv(f'{table_dir}/{name}_vmt_data.csv', 
                           header=['Distance traveled (miles)', 'Total time (days)', 'Extrapolated Annual VMT (miles/year)'], index=False)
-        print(f"  ✓ Saved VMT analysis plots to: {plot_dir}/{name}_speed_vs_time.png and {top_dir}/plots/{name}_distance_vs_time.png")
+        print(f"  ✓ Saved VMT analysis plots to: {plot_dir}/{name}_speed_vs_time.png and {plot_dir}/{name}_distance_vs_time.png")
 
 def analyze_energy_delivered(top_dir, names):
     """Analyze and extrapolate energy delivered per month."""
@@ -2269,9 +2290,19 @@ def analyze_energy_delivered(top_dir, names):
         print("(Skipping analysis - NO_PLOT_MODE is enabled)")
         return
     
-    output_dir = get_output_dir(top_dir, 'data')
-    plot_dir = get_output_dir(top_dir, 'plots')
-    table_dir = get_output_dir(top_dir, 'tables')
+    # Determine correct output directories based on dataset type
+    if DATASET_TYPE == 'pepsi':
+        data_dir = 'data'
+        plot_dir_name = 'plots'
+        table_dir_name = 'tables'
+    else:  # messy_middle
+        data_dir = 'data_messy_middle'
+        plot_dir_name = 'plots_messy'
+        table_dir_name = 'tables_messy'
+    
+    output_dir = get_output_dir(top_dir, data_dir)
+    plot_dir = get_output_dir(top_dir, plot_dir_name)
+    table_dir = get_output_dir(top_dir, table_dir_name)
     
     for name in names:
         print(f"Processing {name}...")
@@ -2350,7 +2381,7 @@ def main():
     # # Stage 4: Prepare Driving/Charging Events
     # prepare_driving_charging_data(top_dir, names)
     
-    # Stage 5: Battery Capacity Analysis
+    # # Stage 5: Battery Capacity Analysis
     # analyze_battery_capacity(top_dir, names)
     
     # # Stage 6: Charging Time & DoD
